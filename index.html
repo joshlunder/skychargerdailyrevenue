@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Skycharger — Today's Revenue Projection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Spline+Sans+Mono:wght@400;500&family=Archivo:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f6f8fa; --line:#e8ebf0;
+    --ink:#0d1117; --muted:#8591a2;
+    --blue:#7dd8f5; --blue-vivid:#29bde8; --blue-dim:#e2f6fd;
+    --green:#c5e46a; --green-dim:#eef7c2;
+    --warn:#f59e0b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:'Archivo',sans-serif;
+    min-height:100vh; padding:clamp(20px,4vw,56px);
+  }
+  .wrap{max-width:920px;margin:0 auto}
+
+  header{
+    display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:52px;flex-wrap:wrap;gap:12px
+  }
+  .brand{
+    font-family:'Archivo',sans-serif;font-size:15px;font-weight:700;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--ink)
+  }
+  .brand em{font-style:normal;color:var(--blue-vivid)}
+  .clock{
+    font-family:'Spline Sans Mono',monospace;color:var(--muted);font-size:13px;
+    background:var(--panel);border:1px solid var(--line);
+    padding:6px 14px;border-radius:999px;display:flex;align-items:center;gap:8px
+  }
+  .live-dot{width:7px;height:7px;border-radius:50%;background:#b8c4cf;flex-shrink:0;transition:background .4s}
+  .live-dot.fresh{background:var(--green)}
+  .live-dot.stale{background:var(--warn)}
+
+  .hero{margin-bottom:52px}
+  .hero .label{
+    font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:14px
+  }
+  .projection{
+    font-family:'Outfit',sans-serif;font-weight:600;
+    font-size:clamp(44px,8vw,80px);line-height:.9;letter-spacing:-.03em;color:var(--ink)
+  }
+  .sub{margin-top:18px;color:var(--muted);font-size:14px;max-width:58ch;line-height:1.65}
+  .pace{
+    display:inline-block;margin-top:18px;padding:7px 16px;border-radius:999px;
+    font-family:'Spline Sans Mono',monospace;font-size:12px;font-weight:500;color:var(--ink)
+  }
+  .pace.up{background:var(--green)}
+  .pace.down{background:#fde8b3;color:#92600a}
+
+  .daytype{margin-top:18px;display:flex;gap:8px;flex-wrap:wrap}
+  .daytype button{
+    background:transparent;border:1px solid var(--line);color:var(--muted);
+    font-family:'Spline Sans Mono',monospace;font-size:11px;
+    padding:6px 14px;border-radius:999px;cursor:pointer;transition:all .15s
+  }
+  .daytype button:hover{border-color:var(--blue-vivid);color:var(--ink)}
+  .daytype button.active{background:var(--blue);border-color:var(--blue);color:var(--ink);font-weight:500}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:32px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+  .stat .k{
+    font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:10px
+  }
+  .stat .v{font-family:'Outfit',sans-serif;font-size:30px;font-weight:600;color:var(--ink)}
+
+  .chartcard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:32px}
+  .chartcard h2{font-size:13px;font-weight:700;letter-spacing:.02em;margin-bottom:4px;color:var(--ink)}
+  .chartcard p{color:var(--muted);font-size:12px;margin-bottom:18px}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:20px;margin-top:14px;font-size:11px;color:var(--muted);font-family:'Spline Sans Mono',monospace}
+  .legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px;border-radius:2px}
+
+  footer{color:var(--muted);font-size:12px;line-height:1.6}
+
+  .err{
+    background:#fff0f0;border:1px solid #fecaca;color:#991b1b;
+    padding:14px 18px;border-radius:12px;
+    font-family:'Spline Sans Mono',monospace;font-size:12px;
+    margin-bottom:24px;display:none;line-height:1.6
+  }
+  .loading{color:var(--muted);font-family:'Spline Sans Mono',monospace;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="./skycharger-logo.jpg" alt="Skycharger" style="height:38px;width:auto;display:block">
+    <div class="clock" id="clock"><span class="live-dot" id="dot"></span><span id="clock-time">—</span></div>
+  </header>
+
+  <div class="err" id="err"></div>
+
+  <section class="hero">
+    <div class="label">Projected revenue · end of today</div>
+    <div class="projection" id="projection"><span class="loading">loading…</span></div>
+    <div class="pace" id="pace" style="display:none"></div>
+    <div class="sub" id="sub"></div>
+    <div class="daytype" id="daytype" style="display:none">
+      <button data-t="auto" class="active">Auto</button>
+      <button data-t="weekday">Weekday</button>
+      <button data-t="weekend">Weekend</button>
+    </div>
+  </section>
+
+  <section class="grid" id="stats"></section>
+
+  <section class="chartcard">
+    <h2>Today vs a typical day</h2>
+    <p>Cumulative revenue through the day — your actual pace (solid) against the rolling baseline (dashed).</p>
+    <svg id="chart" viewBox="0 0 700 300" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend">
+      <span><i style="background:var(--blue-vivid)"></i>Your pace today</span>
+      <span><i style="background:#b8c4cf"></i>Typical day</span>
+    </div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script type="module">
+const $ = (id)=>document.getElementById(id);
+let BASELINE=null, TODAY=null, dayType='auto';
+
+function fmt(n){return '$'+Math.round(n).toLocaleString()}
+function nowInTZ(tz){
+  try{return new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'2-digit',minute:'2-digit',weekday:'short',hour12:true}).format(new Date())}
+  catch(e){return new Date().toLocaleTimeString()}
+}
+function isWeekendTZ(tz){
+  const wd=new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'short'}).format(new Date());
+  return wd==='Sat'||wd==='Sun';
+}
+
+function currentDOW(tz){
+  return new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'short'}).format(new Date()).toLowerCase();
+}
+function pickProfile(tz){
+  if(dayType==='weekday')return BASELINE.profile.weekday;
+  if(dayType==='weekend')return BASELINE.profile.weekend;
+  const dow=currentDOW(tz);
+  if(BASELINE.profile[dow]) return BASELINE.profile[dow];
+  return isWeekendTZ(tz)?BASELINE.profile.weekend:BASELINE.profile.weekday;
+}
+
+function compute(){
+  if(!BASELINE||!TODAY)return null;
+  const tz=TODAY.timezone;
+  const prof=pickProfile(tz);
+  const cum=[]; let s=0; for(let h=0;h<24;h++){s+=prof[h];cum.push(s)}
+  const fullTypical=cum[23];
+  const nowHour=TODAY.asOfHour;
+  const typicalByNow=cum[nowHour];
+  const soFar=TODAY.revenueSoFar;
+  const pace = typicalByNow>0 ? soFar/typicalByNow : 1;
+  const confidence = typicalByNow/fullTypical;
+  const blendedPace = confidence*pace + (1-confidence)*1.0;
+  const projected = soFar + (fullTypical - typicalByNow)*blendedPace;
+  return {tz,prof,cum,fullTypical,nowHour,typicalByNow,soFar,pace,confidence,blendedPace,projected};
+}
+
+function render(){
+  const c=compute(); if(!c)return;
+  $('projection').innerHTML = '$'+Math.floor(c.projected).toLocaleString();
+  const pct=Math.round((c.pace-1)*100);
+  const pb=$('pace'); pb.style.display='inline-block';
+  if(c.pace>=1){pb.className='pace up';pb.textContent=`running ${pct>=0?'+':''}${pct}% vs typical`;}
+  else{pb.className='pace down';pb.textContent=`running ${pct}% vs typical`;}
+  const confPct=Math.round(c.confidence*100);
+  $('sub').textContent=`As of the ${labelHour(c.nowHour)} hour, you've taken in ${fmt(c.soFar)}. Only ${confPct}% of a typical day's revenue has occurred so far — the projection blends your current pace with the expected afternoon pattern as the day fills in.`;
+  $('daytype').style.display='flex';
+  $('stats').innerHTML=[
+    ['Revenue so far',fmt(c.soFar)],
+    ['Typical by now',fmt(c.typicalByNow)],
+    ['Typical full day',fmt(c.fullTypical)],
+    ['Still to come',fmt(Math.max(0,c.projected-c.soFar))],
+  ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  drawChart(c);
+  const profLabel = dayType==='auto' ? currentDOW(c.tz) : dayType;
+  $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Projection uses the <strong style="color:var(--ink)">${profLabel}</strong> day-of-week profile; accuracy improves as the day progresses.`;
+}
+
+function labelHour(h){const ap=h<12?'AM':'PM';const x=h%12===0?12:h%12;return `${x}${ap}`}
+
+function drawChart(c){
+  const W=700,H=300,pad=40;
+  const maxY=Math.max(c.fullTypical, c.cum[c.nowHour]/(c.pace||1)*1.05, c.projected)*1.05;
+  const x=h=>pad+(h/23)*(W-pad*1.4);
+  const y=v=>H-pad-(v/maxY)*(H-pad*1.6);
+  let typ='M'+c.cum.map((v,h)=>`${x(h)},${y(v)}`).join(' L');
+  const mine=[]; for(let h=0;h<24;h++){
+    mine.push(h<=c.nowHour ? c.cum[h]*c.pace : c.soFar+(c.cum[h]-c.typicalByNow)*c.blendedPace);
+  }
+  let mp='M'+mine.map((v,h)=>`${x(h)},${y(v)}`).join(' L');
+  let ticks='';for(let h=0;h<=24;h+=6){const xx=x(Math.min(h,23));ticks+=`<line x1="${xx}" y1="${H-pad}" x2="${xx}" y2="${H-pad+5}" stroke="#e8ebf0"/><text x="${xx}" y="${H-pad+18}" fill="#8591a2" font-size="10" font-family="monospace" text-anchor="middle">${labelHour(Math.min(h,23))}</text>`}
+  const nowX=x(c.nowHour);
+  $('chart').innerHTML=`
+    <line x1="${pad}" y1="${H-pad}" x2="${W-pad*0.4}" y2="${H-pad}" stroke="#e8ebf0"/>
+    ${ticks}
+    <line x1="${nowX}" y1="${pad*0.5}" x2="${nowX}" y2="${H-pad}" stroke="#e8ebf0" stroke-dasharray="3 4"/>
+    <text x="${nowX}" y="${pad*0.5-4}" fill="#8591a2" font-size="10" font-family="monospace" text-anchor="middle">now</text>
+    <path d="${typ}" fill="none" stroke="#b8c4cf" stroke-width="2" stroke-dasharray="5 5" opacity="0.8"/>
+    <path d="${mp}" fill="none" stroke="#29bde8" stroke-width="2.5"/>
+    <circle cx="${x(c.nowHour)}" cy="${y(mine[c.nowHour])}" r="5" fill="#c5e46a" stroke="#fff" stroke-width="2"/>
+  `;
+}
+
+async function load(){
+  try{
+    BASELINE=await (await fetch('/api/baseline')).json();
+  }catch(e){ showErr('Could not load baseline data.'); return; }
+  try{
+    const r=await fetch('/api/today');
+    if(!r.ok){
+      const j=await r.json().catch(()=>({}));
+      if(j.code==='AUTH_INVALID'){ showAuthExpired(); }
+      else{ showErr('Live data unavailable: '+(j.error||('HTTP '+r.status))+' — showing typical-day baseline.'); }
+      TODAY={timezone:BASELINE_TZ(),asOfHour:guessHour(),revenueSoFar:typicalByNowFallback(),fetchedAt:null};
+    } else {
+      TODAY=await r.json();
+    }
+  }catch(e){
+    showErr('Live data unavailable: '+e.message+' — showing typical-day baseline.');
+    TODAY={timezone:BASELINE_TZ(),asOfHour:guessHour(),revenueSoFar:typicalByNowFallback(),fetchedAt:null};
+  }
+  updateDot();
+  render();
+}
+
+function updateDot(){
+  const dot=$('dot');
+  if(!TODAY?.fetchedAt){dot.className='live-dot stale';return;}
+  const ageMin=(Date.now()-new Date(TODAY.fetchedAt).getTime())/60000;
+  dot.className='live-dot '+(ageMin<10?'fresh':'stale');
+}
+function BASELINE_TZ(){return 'America/New_York'}
+function guessHour(){return new Date().getHours()}
+function typicalByNowFallback(){const p=BASELINE.profile.all;let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s}
+function showErr(m){const e=$('err');e.style.display='block';e.textContent=m}
+function showAuthExpired(){
+  const e=$('err');e.style.display='block';e.style.whiteSpace='normal';
+  e.innerHTML='<strong>Live data has stopped — the Electric Era login this dashboard uses is no longer valid.</strong><br><br>'
+    +'This usually means the account was deactivated or its password changed. The numbers below are the typical-day baseline, not live.<br><br>'
+    +'To fix: update the <code>EE_USERNAME</code> / <code>EE_PASSWORD</code> values in the hosting settings (Vercel → Project → Settings → Environment Variables) to a currently-valid Electric Era login, then redeploy.';
+}
+
+$('daytype').addEventListener('click',ev=>{
+  if(ev.target.tagName!=='BUTTON')return;
+  dayType=ev.target.dataset.t;
+  [...$('daytype').children].forEach(b=>b.classList.toggle('active',b===ev.target));
+  render();
+});
+
+function tick(){$('clock-time').textContent=nowInTZ(BASELINE_TZ());updateDot();}
+tick();setInterval(tick,1000*30);
+load();
+setInterval(load,1000*300);
+</script>
+</body>
+</html>

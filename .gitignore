@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+.claude/
+*.py
+ratemy-gcds/
+AUTH_ERROR_PREVIEW.png
+SETUP_GUIDE.md
