@@ -91,6 +91,23 @@
     margin-bottom:24px;display:none;line-height:1.6
   }
   .loading{color:var(--muted);font-family:'Spline Sans Mono',monospace;font-size:14px}
+
+  .accuracycard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:32px}
+  .accuracycard h2{font-size:13px;font-weight:700;letter-spacing:.02em;margin-bottom:4px;color:var(--ink)}
+  .accuracycard p{color:var(--muted);font-size:12px;margin-bottom:18px}
+  .acc-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .acc-table{width:100%;border-collapse:collapse;font-size:12px;font-family:'Spline Sans Mono',monospace;white-space:nowrap}
+  .acc-table th{text-align:right;color:var(--muted);font-weight:400;font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
+  .acc-table th:first-child,.acc-table th:nth-child(2),.acc-table th:nth-child(3){text-align:left}
+  .acc-table td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:right}
+  .acc-table td:first-child,.acc-table td:nth-child(2),.acc-table td:nth-child(3){text-align:left}
+  .acc-table tbody tr:last-child td{border-bottom:none}
+  .err-pill{border-radius:4px;padding:2px 6px;font-size:11px;display:inline-block}
+  .err-good{background:var(--green-dim);color:#3a6208}
+  .err-ok{background:#fff8e2;color:#92600a}
+  .err-bad{background:#fff0f0;color:#991b1b}
+  .acc-avg td{font-weight:600;border-top:2px solid var(--line);border-bottom:none!important}
+  .acc-table tbody tr:hover td{background:rgba(0,0,0,.018)}
 </style>
 </head>
 <body>
@@ -124,6 +141,12 @@
       <span><i style="background:var(--blue-vivid)"></i>Your pace today</span>
       <span><i style="background:#b8c4cf"></i>Typical day</span>
     </div>
+  </section>
+
+  <section class="accuracycard" id="accuracy-section" style="display:none">
+    <h2>Projection accuracy</h2>
+    <p>How close end-of-day projections were at each 2-hour check-in vs. what actually happened. Logged automatically each night.</p>
+    <div class="acc-wrap" id="accuracy-table-wrap"></div>
   </section>
 
   <footer id="foot"></footer>
@@ -255,6 +278,47 @@ function showAuthExpired(){
     +'To fix: update the <code>EE_USERNAME</code> / <code>EE_PASSWORD</code> values in the hosting settings (Vercel → Project → Settings → Environment Variables) to a currently-valid Electric Era login, then redeploy.';
 }
 
+const SNAP_HOURS=[8,10,12,14,16,18,20,22];
+const SNAP_LABELS=['8am','10am','12pm','2pm','4pm','6pm','8pm','10pm'];
+
+function errClass(pct){const a=Math.abs(pct);return a<=5?'err-good':a<=15?'err-ok':'err-bad'}
+
+function renderAccuracy(log){
+  if(!log||!log.length)return;
+  const recent=[...log].reverse().slice(0,14);
+  const avgErrs=SNAP_HOURS.map(h=>{
+    const vals=recent.filter(e=>e.snapshots[h]!=null).map(e=>(e.snapshots[h]-e.actual)/e.actual*100);
+    if(!vals.length)return null;
+    return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
+  });
+  function errPill(proj,actual){
+    const pct=Math.round((proj-actual)/actual*100);
+    return `<span class="err-pill ${errClass(pct)}">${pct>=0?'+':''}${pct}%</span>`;
+  }
+  let html='<table class="acc-table"><thead><tr><th>Date</th><th>DOW</th><th>Actual</th>';
+  SNAP_LABELS.forEach(l=>html+=`<th>${l}</th>`);
+  html+='</tr></thead><tbody>';
+  recent.forEach(e=>{
+    html+=`<tr><td>${e.date.slice(5)}</td><td>${e.dow}</td><td>${fmt(e.actual)}</td>`;
+    SNAP_HOURS.forEach(h=>{
+      html+=e.snapshots[h]==null?'<td>—</td>':`<td>${errPill(e.snapshots[h],e.actual)}</td>`;
+    });
+    html+='</tr>';
+  });
+  html+='<tr class="acc-avg"><td colspan="3">Avg error</td>';
+  avgErrs.forEach(avg=>{
+    if(avg==null){html+='<td>—</td>';return;}
+    html+=`<td><span class="err-pill ${errClass(avg)}">${avg>=0?'+':''}${avg}%</span></td>`;
+  });
+  html+='</tr></tbody></table>';
+  $('accuracy-table-wrap').innerHTML=html;
+  $('accuracy-section').style.display='block';
+}
+
+async function loadAccuracy(){
+  try{const data=await (await fetch('/api/accuracy')).json();renderAccuracy(data);}catch(e){}
+}
+
 $('daytype').addEventListener('click',ev=>{
   if(ev.target.tagName!=='BUTTON')return;
   dayType=ev.target.dataset.t;
@@ -265,6 +329,7 @@ $('daytype').addEventListener('click',ev=>{
 function tick(){$('clock-time').textContent=nowInTZ(BASELINE_TZ());updateDot();}
 tick();setInterval(tick,1000*30);
 load();
+loadAccuracy();
 setInterval(load,1000*300);
 </script>
 </body>
