@@ -287,11 +287,12 @@ function renderAccuracy(log){
   if(!log||!log.length)return;
   const recent=[...log].reverse().slice(0,14);
   const avgErrs=SNAP_HOURS.map(h=>{
-    const vals=recent.filter(e=>e.snapshots[h]!=null).map(e=>(e.snapshots[h]-e.actual)/e.actual*100);
+    const vals=recent.filter(e=>e.snapshots[h]!=null&&e.actual>0).map(e=>(e.snapshots[h]-e.actual)/e.actual*100);
     if(!vals.length)return null;
     return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
   });
   function errPill(proj,actual){
+    if(!actual)return '<span class="err-pill err-ok">—</span>';
     const pct=Math.round((proj-actual)/actual*100);
     return `<span class="err-pill ${errClass(pct)}">${pct>=0?'+':''}${pct}%</span>`;
   }

@@ -63,8 +63,8 @@ function isHoliday(dateStr) {
   if (nthWeekday(year, 11, 4, 4) === dateStr) return true;
   // Black Friday — day after Thanksgiving
   const thanksgiving = nthWeekday(year, 11, 4, 4);
-  const blackFriday = new Intl.DateTimeFormat("en-CA").format(
-    new Date(new Date(thanksgiving).getTime() + 86400000)
+  const blackFriday = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(
+    new Date(new Date(thanksgiving + "T00:00:00Z").getTime() + 86400000)
   );
   if (blackFriday === dateStr) return true;
   return false;
