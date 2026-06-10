@@ -140,12 +140,12 @@
 
   <div class="chartrow">
     <section class="chartcard">
-      <h2>Today vs a typical day</h2>
+      <h2 id="chart-title">Today vs a typical day</h2>
       <p>Cumulative revenue through the day — actual pace (solid) and projection (dashed) vs baseline.</p>
       <div style="position:relative;height:260px"><canvas id="chart"></canvas></div>
       <div class="legend">
         <span><i style="background:#29bde8"></i>Today</span>
-        <span><i style="background:#b8c4cf"></i>Typical day</span>
+        <span><i style="background:#b8c4cf"></i><span id="chart-legend-typical">Typical day</span></span>
       </div>
     </section>
     <section class="chartcard">
@@ -230,8 +230,13 @@ function render(){
     ['Typical full day',fmt(c.fullTypical)],
     ['Still to come',fmt(Math.max(0,c.projected-c.soFar))],
   ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  drawChart(c);
+  const typLabel = dayType==='weekday' ? 'Weekday'
+                 : dayType==='weekend' ? 'Weekend'
+                 : (DOW_NAMES[currentDOW(c.tz)] || 'day');
+  drawChart(c, typLabel);
   render7DayChart(_accuracyLog);
+  $('chart-title').textContent = `Today vs a typical ${typLabel}`;
+  $('chart-legend-typical').textContent = `Typical ${typLabel}`;
   const profLabel = dayType==='auto' ? currentDOW(c.tz) : dayType;
   const descEl=$('profile-desc');
   if(dayType==='weekday') descEl.textContent='Projection compared against a typical weekday';
@@ -263,7 +268,7 @@ const nowLinePlugin = {
   }
 };
 
-function drawChart(c){
+function drawChart(c, typLabel){
   _nowHour = c.nowHour;
 
   const labels = Array.from({length:24}, (_,h) => labelHour(h));
@@ -280,6 +285,7 @@ function drawChart(c){
   });
 
   if (intradayChart) {
+    intradayChart.data.datasets[0].label = `Typical ${typLabel}`;
     intradayChart.data.datasets[0].data = typicalData;
     intradayChart.data.datasets[1].data = todayData;
     intradayChart.update('none');
@@ -292,7 +298,7 @@ function drawChart(c){
       labels,
       datasets: [
         {
-          label: 'Typical day',
+          label: `Typical ${typLabel}`,
           data: typicalData,
           borderColor: '#b8c4cf',
           borderWidth: 2,
