@@ -12,6 +12,39 @@ const API_BASE = "https://www.api.mothership.electriceratechnologies.com";
 const SNAPSHOT_HOURS = [8, 10, 12, 14, 16, 18, 20, 22];
 const DOW_MAP = { Sun:"sun", Mon:"mon", Tue:"tue", Wed:"wed", Thu:"thu", Fri:"fri", Sat:"sat" };
 
+function nthWeekday(year, month, weekday, n) {
+  const d = new Date(Date.UTC(year, month - 1, 1));
+  let count = 0;
+  while (true) {
+    if (d.getUTCDay() === weekday) { count++; if (count === n) break; }
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(d);
+}
+
+function lastWeekday(year, month, weekday) {
+  const d = new Date(Date.UTC(year, month, 0));
+  while (d.getUTCDay() !== weekday) d.setUTCDate(d.getUTCDate() - 1);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(d);
+}
+
+function isHoliday(dateStr) {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const d = `${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+  if (d === "07-04") return true;
+  if (d === "12-24") return true;
+  if (d === "12-25") return true;
+  if (lastWeekday(year, 5, 1) === dateStr) return true;
+  if (nthWeekday(year, 9, 1, 1) === dateStr) return true;
+  if (nthWeekday(year, 11, 4, 4) === dateStr) return true;
+  const thanksgiving = nthWeekday(year, 11, 4, 4);
+  const blackFriday = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(
+    new Date(new Date(thanksgiving + "T00:00:00Z").getTime() + 86400000)
+  );
+  if (blackFriday === dateStr) return true;
+  return false;
+}
+
 async function getToken() {
   const body = new URLSearchParams({
     grant_type: "password",
@@ -56,6 +89,11 @@ export default async function handler(req, res) {
     const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(todayDate);
     const wdShort = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(yesterdayDate);
     const dow = DOW_MAP[wdShort];
+
+    if (isHoliday(dateStr)) {
+      return res.status(200).json({ skipped: dateStr, reason: "holiday" });
+    }
+
     const offset = utcOffsetString(tz, yesterdayDate);
 
     // Fetch all 24 hours of yesterday in parallel
