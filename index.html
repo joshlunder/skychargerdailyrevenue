@@ -21,7 +21,7 @@
     font-family:'Archivo',sans-serif;
     min-height:100vh; padding:clamp(20px,4vw,56px);
   }
-  .wrap{max-width:920px;margin:0 auto}
+  .wrap{max-width:960px;margin:0 auto}
 
   header{
     display:flex;justify-content:space-between;align-items:center;
@@ -76,10 +76,13 @@
   }
   .stat .v{font-family:'Outfit',sans-serif;font-size:30px;font-weight:600;color:var(--ink)}
 
+  .chartrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:32px}
+  .chartrow .chartcard{margin-bottom:0}
+  @media(max-width:640px){.chartrow{grid-template-columns:1fr}}
+
   .chartcard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:32px}
   .chartcard h2{font-size:13px;font-weight:700;letter-spacing:.02em;margin-bottom:4px;color:var(--ink)}
   .chartcard p{color:var(--muted);font-size:12px;margin-bottom:18px}
-  svg{width:100%;height:auto;display:block}
   .legend{display:flex;gap:20px;margin-top:14px;font-size:11px;color:var(--muted);font-family:'Spline Sans Mono',monospace}
   .legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px;border-radius:2px}
 
@@ -135,15 +138,29 @@
 
   <section class="grid" id="stats"></section>
 
-  <section class="chartcard">
-    <h2>Today vs a typical day</h2>
-    <p>Cumulative revenue through the day — your actual pace (solid) against the rolling baseline (dashed).</p>
-    <svg id="chart" viewBox="0 0 700 300" preserveAspectRatio="xMidYMid meet"></svg>
-    <div class="legend">
-      <span><i style="background:var(--blue-vivid)"></i>Your pace today</span>
-      <span><i style="background:#b8c4cf"></i>Typical day</span>
-    </div>
-  </section>
+  <div class="chartrow">
+    <section class="chartcard">
+      <h2>Today vs a typical day</h2>
+      <p>Cumulative revenue through the day — actual pace (solid) and projection (dashed) vs baseline.</p>
+      <div style="position:relative;height:260px"><canvas id="chart"></canvas></div>
+      <div class="legend">
+        <span><i style="background:#29bde8"></i>Today</span>
+        <span><i style="background:#b8c4cf"></i>Typical day</span>
+      </div>
+    </section>
+    <section class="chartcard">
+      <h2>Last 7 days vs baseline</h2>
+      <p>Daily revenue vs expected baseline — green when above, amber when below.</p>
+      <div style="position:relative;height:260px">
+        <canvas id="week-chart"></canvas>
+        <div id="week-chart-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8591a2;font-family:'Spline Sans Mono',monospace;font-size:12px;text-align:center;padding:20px;line-height:1.6">Data available after the first nightly log runs at 1am ET</div>
+      </div>
+      <div class="legend">
+        <span><i style="background:#c5e46a;border-radius:2px"></i>Above baseline</span>
+        <span><i style="background:#f59e0b;border-radius:2px"></i>Below baseline</span>
+      </div>
+    </section>
+  </div>
 
   <section class="accuracycard" id="accuracy-section" style="display:none">
     <h2>Projection accuracy</h2>
@@ -154,9 +171,11 @@
   <footer id="foot"></footer>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script type="module">
 const $ = (id)=>document.getElementById(id);
 let BASELINE=null, TODAY=null, dayType='auto';
+let intradayChart=null, weekChart=null, _nowHour=0, _accuracyLog=null;
 
 function fmt(n){return '$'+Math.round(n).toLocaleString()}
 function nowInTZ(tz){
@@ -212,6 +231,7 @@ function render(){
     ['Still to come',fmt(Math.max(0,c.projected-c.soFar))],
   ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   drawChart(c);
+  render7DayChart(_accuracyLog);
   const profLabel = dayType==='auto' ? currentDOW(c.tz) : dayType;
   const descEl=$('profile-desc');
   if(dayType==='weekday') descEl.textContent='Projection compared against a typical weekday';
@@ -223,27 +243,202 @@ function render(){
 
 function labelHour(h){const ap=h<12?'AM':'PM';const x=h%12===0?12:h%12;return `${x}${ap}`}
 
-function drawChart(c){
-  const W=700,H=300,pad=40;
-  const maxY=Math.max(c.fullTypical, c.cum[c.nowHour]/(c.pace||1)*1.05, c.projected)*1.05;
-  const x=h=>pad+(h/23)*(W-pad*1.4);
-  const y=v=>H-pad-(v/maxY)*(H-pad*1.6);
-  let typ='M'+c.cum.map((v,h)=>`${x(h)},${y(v)}`).join(' L');
-  const mine=[]; for(let h=0;h<24;h++){
-    mine.push(h<=c.nowHour ? c.cum[h]*c.pace : c.soFar+(c.cum[h]-c.typicalByNow)*c.blendedPace);
+const nowLinePlugin = {
+  id: 'nowLine',
+  afterDraw(chart) {
+    if (chart.canvas.id !== 'chart') return;
+    const {ctx, scales:{x, y}} = chart;
+    const xPx = x.getPixelForValue(_nowHour);
+    ctx.save();
+    ctx.strokeStyle = '#e8ebf0';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(xPx, y.top); ctx.lineTo(xPx, y.bottom); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#8591a2';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('now', xPx, y.top - 6);
+    ctx.restore();
   }
-  let mp='M'+mine.map((v,h)=>`${x(h)},${y(v)}`).join(' L');
-  let ticks='';for(let h=0;h<=24;h+=6){const xx=x(Math.min(h,23));ticks+=`<line x1="${xx}" y1="${H-pad}" x2="${xx}" y2="${H-pad+5}" stroke="#e8ebf0"/><text x="${xx}" y="${H-pad+18}" fill="#8591a2" font-size="10" font-family="monospace" text-anchor="middle">${labelHour(Math.min(h,23))}</text>`}
-  const nowX=x(c.nowHour);
-  $('chart').innerHTML=`
-    <line x1="${pad}" y1="${H-pad}" x2="${W-pad*0.4}" y2="${H-pad}" stroke="#e8ebf0"/>
-    ${ticks}
-    <line x1="${nowX}" y1="${pad*0.5}" x2="${nowX}" y2="${H-pad}" stroke="#e8ebf0" stroke-dasharray="3 4"/>
-    <text x="${nowX}" y="${pad*0.5-4}" fill="#8591a2" font-size="10" font-family="monospace" text-anchor="middle">now</text>
-    <path d="${typ}" fill="none" stroke="#b8c4cf" stroke-width="2" stroke-dasharray="5 5" opacity="0.8"/>
-    <path d="${mp}" fill="none" stroke="#29bde8" stroke-width="2.5"/>
-    <circle cx="${x(c.nowHour)}" cy="${y(mine[c.nowHour])}" r="5" fill="#c5e46a" stroke="#fff" stroke-width="2"/>
-  `;
+};
+
+function drawChart(c){
+  _nowHour = c.nowHour;
+
+  const labels = Array.from({length:24}, (_,h) => labelHour(h));
+
+  const typicalData = [...c.cum];
+
+  // Use actual per-hour cumulative from API where available, fall back to scaled typical
+  const todayData = Array.from({length:24}, (_,h) => {
+    if (h <= c.nowHour) {
+      const entry = TODAY?.hourly?.[h];
+      return entry != null ? entry.cumulative : c.cum[h] * c.pace;
+    }
+    return c.soFar + (c.cum[h] - c.typicalByNow) * c.blendedPace;
+  });
+
+  if (intradayChart) {
+    intradayChart.data.datasets[0].data = typicalData;
+    intradayChart.data.datasets[1].data = todayData;
+    intradayChart.update('none');
+    return;
+  }
+
+  intradayChart = new Chart($('chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Typical day',
+          data: typicalData,
+          borderColor: '#b8c4cf',
+          borderWidth: 2,
+          borderDash: [5, 5],
+          fill: false,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.3,
+        },
+        {
+          label: 'Today',
+          data: todayData,
+          borderColor: '#29bde8',
+          borderWidth: 2.5,
+          fill: false,
+          segment: {
+            borderDash: ctx => ctx.p0DataIndex >= _nowHour ? [4, 4] : undefined,
+          },
+          pointRadius: ctx => ctx.dataIndex === _nowHour ? 5 : 0,
+          pointBackgroundColor: '#c5e46a',
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          pointHoverRadius: 4,
+          tension: 0.3,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: {mode:'index', intersect:false},
+      plugins: {
+        legend: {display:false},
+        tooltip: {
+          callbacks: {
+            label: item => `${item.dataset.label}: $${Math.round(item.parsed.y).toLocaleString()}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: {color:'#e8ebf0'},
+          ticks: {
+            color:'#8591a2',
+            font:{size:10},
+            maxRotation: 0,
+            autoSkip: false,
+            callback: (_,i) => [0,6,12,18,23].includes(i) ? labelHour(i) : null,
+          }
+        },
+        y: {
+          grid: {color:'#e8ebf0'},
+          ticks: {
+            color:'#8591a2',
+            font:{size:10},
+            callback: v => '$'+(v>=1000 ? Math.round(v/1000)+'k' : Math.round(v))
+          }
+        }
+      }
+    },
+    plugins: [nowLinePlugin]
+  });
+}
+
+function render7DayChart(log){
+  const empty = $('week-chart-empty');
+  if (!log || !log.length || !BASELINE) {
+    if (empty) empty.style.display = 'flex';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+
+  const recent = [...log].reverse().slice(0, 7).reverse();
+  const labels = recent.map(e => e.date.slice(5));
+  const baselines = recent.map(e => {
+    const prof = BASELINE.profile[e.dow];
+    return prof ? Number(prof.reduce((a,b) => a+b, 0).toFixed(2)) : 0;
+  });
+  const actuals = recent.map(e => e.actual);
+  const barColors = recent.map((e,i) => e.actual >= baselines[i] ? '#c5e46a' : '#f59e0b');
+
+  if (weekChart) {
+    weekChart.data.labels = labels;
+    weekChart.data.datasets[0].data = actuals;
+    weekChart.data.datasets[0].backgroundColor = barColors;
+    weekChart.data.datasets[1].data = baselines;
+    weekChart.update('none');
+    return;
+  }
+
+  weekChart = new Chart($('week-chart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Actual',
+          data: actuals,
+          backgroundColor: barColors,
+          borderRadius: 4,
+          order: 2,
+        },
+        {
+          label: 'Baseline',
+          data: baselines,
+          type: 'line',
+          borderColor: '#b8c4cf',
+          borderWidth: 2,
+          borderDash: [4, 4],
+          fill: false,
+          pointRadius: 3,
+          pointBackgroundColor: '#b8c4cf',
+          order: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: {mode:'index', intersect:false},
+      plugins: {
+        legend: {display:false},
+        tooltip: {
+          callbacks: {
+            label: item => `${item.dataset.label}: $${Math.round(item.parsed.y).toLocaleString()}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: {color:'#e8ebf0'},
+          ticks: {color:'#8591a2', font:{size:10}}
+        },
+        y: {
+          grid: {color:'#e8ebf0'},
+          ticks: {
+            color:'#8591a2',
+            font:{size:10},
+            callback: v => '$'+(v>=1000 ? Math.round(v/1000)+'k' : Math.round(v))
+          }
+        }
+      }
+    }
+  });
 }
 
 async function load(){
@@ -275,7 +470,10 @@ function updateDot(){
   dot.className='live-dot '+(ageMin<10?'fresh':'stale');
 }
 function BASELINE_TZ(){return 'America/New_York'}
-function guessHour(){return new Date().getHours()}
+function guessHour(){
+  const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hour12:false}).format(new Date());
+  return parseInt(h,10)%24;
+}
 function typicalByNowFallback(){const p=BASELINE.profile.all;let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s}
 function showErr(m){const e=$('err');e.style.display='block';e.textContent=m}
 function showAuthExpired(){
@@ -325,7 +523,12 @@ function renderAccuracy(log){
 }
 
 async function loadAccuracy(){
-  try{const data=await (await fetch('/api/accuracy')).json();renderAccuracy(data);}catch(e){}
+  try{
+    const data=await (await fetch('/api/accuracy')).json();
+    _accuracyLog=data;
+    renderAccuracy(data);
+    render7DayChart(data);
+  }catch(e){}
 }
 
 $('daytype').addEventListener('click',ev=>{
