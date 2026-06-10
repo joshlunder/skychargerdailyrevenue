@@ -66,6 +66,7 @@
   }
   .daytype button:hover{border-color:var(--blue-vivid);color:var(--ink)}
   .daytype button.active{background:var(--blue);border-color:var(--blue);color:var(--ink);font-weight:500}
+  .profile-desc{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
 
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:32px}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
@@ -129,6 +130,7 @@
       <button data-t="weekday">Weekday</button>
       <button data-t="weekend">Weekend</button>
     </div>
+    <div class="profile-desc" id="profile-desc" style="display:none"></div>
   </section>
 
   <section class="grid" id="stats"></section>
@@ -211,6 +213,11 @@ function render(){
   ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   drawChart(c);
   const profLabel = dayType==='auto' ? currentDOW(c.tz) : dayType;
+  const descEl=$('profile-desc');
+  if(dayType==='weekday') descEl.textContent='Projection compared against a typical weekday';
+  else if(dayType==='weekend') descEl.textContent='Projection compared against a typical weekend';
+  else descEl.textContent=`Projection compared against a typical ${DOW_NAMES[currentDOW(c.tz)]||'day'}`;
+  descEl.style.display='block';
   $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Projection uses the <strong style="color:var(--ink)">${profLabel}</strong> day-of-week profile; accuracy improves as the day progresses.`;
 }
 
@@ -278,6 +285,7 @@ function showAuthExpired(){
     +'To fix: update the <code>EE_USERNAME</code> / <code>EE_PASSWORD</code> values in the hosting settings (Vercel → Project → Settings → Environment Variables) to a currently-valid Electric Era login, then redeploy.';
 }
 
+const DOW_NAMES={sun:'Sunday',mon:'Monday',tue:'Tuesday',wed:'Wednesday',thu:'Thursday',fri:'Friday',sat:'Saturday'};
 const SNAP_HOURS=[8,10,12,14,16,18,20,22];
 const SNAP_LABELS=['8am','10am','12pm','2pm','4pm','6pm','8pm','10pm'];
 
