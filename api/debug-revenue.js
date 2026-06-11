@@ -54,16 +54,21 @@ export default async function handler(req, res) {
 
     const now = new Date();
 
-    // If explicit from/to provided, just return that single window's revenue.
-    if (req.query.from && req.query.to) {
-      const r = await rev(token, orgId, req.query.from, req.query.to);
+    // If a date is provided (YYYY-MM-DD), compare that full day across ET/MT/PT
+    // using ONE token (minimizes auth calls / rate limits).
+    if (req.query.date) {
+      const d = req.query.date;
+      // next calendar day
+      const next = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" })
+        .format(new Date(new Date(d + "T00:00:00Z").getTime() + 86400000));
+      const zones = { eastern: "-04:00", mountain: "-06:00", pacific: "-07:00" };
+      const out = {};
+      for (const [name, off] of Object.entries(zones)) {
+        const r = await rev(token, orgId, `${d}T00:00:00${off}`, `${next}T00:00:00${off}`);
+        out[name] = { revenue: r.revenue, sessions: r.raw?.totalSessions };
+      }
       res.setHeader("cache-control", "no-store");
-      return res.status(200).json({
-        window: `${req.query.from} → ${req.query.to}`,
-        revenue: r.revenue,
-        totalSessions: r.raw?.totalSessions,
-        totalRevenueCents: r.raw?.totalRevenue,
-      });
+      return res.status(200).json({ date: d, fullDay: out });
     }
 
     const offset = utcOffsetString(tz, now);
