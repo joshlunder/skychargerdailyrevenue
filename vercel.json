@@ -7,6 +7,6 @@
   },
   "crons": [
     { "path": "/api/rebuild-baseline", "schedule": "0 9 * * 1" },
-    { "path": "/api/log-accuracy", "schedule": "0 5 * * *" }
+    { "path": "/api/log-accuracy", "schedule": "0 9 * * *" }
   ]
 }
