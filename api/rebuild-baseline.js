@@ -86,7 +86,7 @@ function utcOffsetString(tz, refDate) {
 
 export default async function handler(req, res) {
   try {
-    const tz = process.env.EE_TIMEZONE || "America/Los_Angeles";
+    const tz = process.env.EE_TIMEZONE || "America/New_York";
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
 

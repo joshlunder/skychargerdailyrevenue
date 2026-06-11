@@ -153,7 +153,7 @@
       <p>Daily revenue vs expected baseline — green when above, amber when below.</p>
       <div style="position:relative;height:260px">
         <canvas id="week-chart"></canvas>
-        <div id="week-chart-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8591a2;font-family:'Spline Sans Mono',monospace;font-size:12px;text-align:center;padding:20px;line-height:1.6">Data available after the first nightly log runs at 2am PT</div>
+        <div id="week-chart-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8591a2;font-family:'Spline Sans Mono',monospace;font-size:12px;text-align:center;padding:20px;line-height:1.6">Data available after the first nightly log runs at 5am ET</div>
       </div>
       <div class="legend">
         <span><i style="background:#c5e46a;border-radius:2px"></i>Above baseline</span>
@@ -475,9 +475,9 @@ function updateDot(){
   const ageMin=(Date.now()-new Date(TODAY.fetchedAt).getTime())/60000;
   dot.className='live-dot '+(ageMin<10?'fresh':'stale');
 }
-function BASELINE_TZ(){return 'America/Los_Angeles'}
+function BASELINE_TZ(){return 'America/New_York'}
 function guessHour(){
-  const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',hour12:false}).format(new Date());
+  const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hour12:false}).format(new Date());
   return parseInt(h,10)%24;
 }
 function typicalByNowFallback(){const p=BASELINE.profile.all;let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s}

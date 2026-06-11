@@ -7,7 +7,7 @@
 //   EE_PASSWORD   Electric Era password
 //   EE_CLIENT_ID  OAuth client_id
 //   EE_ORG_ID     organization ID (e.g. 77)
-//   EE_TIMEZONE   IANA tz of the sites, e.g. "America/Los_Angeles"
+//   EE_TIMEZONE   IANA tz of the sites, e.g. "America/New_York"
 
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
@@ -86,7 +86,7 @@ function currentLocalHour(tz) {
 
 export default async function handler(req, res) {
   try {
-    const tz = process.env.EE_TIMEZONE || "America/Los_Angeles";
+    const tz = process.env.EE_TIMEZONE || "America/New_York";
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
     const nowHour = currentLocalHour(tz);
