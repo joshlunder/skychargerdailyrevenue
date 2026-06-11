@@ -1,4 +1,4 @@
-// Runs nightly at 5am UTC (1am ET). Logs yesterday's actual revenue alongside
+// Runs nightly at 9am UTC (2am PT). Logs yesterday's actual revenue alongside
 // what the projection would have shown at each 2-hour snapshot through the day.
 // Saves a rolling 90-day log to Blob as accuracy-log.json.
 
@@ -82,7 +82,7 @@ export default async function handler(req, res) {
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
 
-    // Log yesterday — it's fully complete by the time this runs (1am ET)
+    // Log yesterday — it's fully complete by the time this runs (2am PT)
     const yesterdayDate = new Date(Date.now() - 86400000);
     const todayDate = new Date();
     const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(yesterdayDate);
