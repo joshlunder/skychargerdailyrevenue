@@ -107,20 +107,26 @@ export default async function handler(req, res) {
       ndays.all++; ndays[wk]++; ndays[dow]++;
 
       const offset = utcOffsetString(tz, refDate);
-      const hourRevenues = await Promise.all(
-        Array.from({ length: 24 }, (_, h) => {
+      const hours = Array.from({ length: 24 }, (_, h) => h);
+      const hourRevenues = [];
+      for (let i = 0; i < hours.length; i += 5) {
+        const batch = hours.slice(i, i + 5);
+        const results = await Promise.all(batch.map(async h => {
           const start = `${dateStr}T${String(h).padStart(2, "0")}:00:00${offset}`;
           const end = h === 23
             ? `${nextDateStr}T00:00:00${offset}`
             : `${dateStr}T${String(h + 1).padStart(2, "0")}:00:00${offset}`;
           const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
             `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
-          return fetch(url, { headers: { authorization: `Bearer ${token}` } })
-            .then(r => r.ok ? r.json() : null)
-            .then(j => (j?.aggregateStats?.totalRevenue || 0) / 100)
-            .catch(() => 0);
-        })
-      );
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+            if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+            if (attempt === 0) await new Promise(res => setTimeout(res, 300));
+          }
+          return 0;
+        }));
+        hourRevenues.push(...results);
+      }
       hourRevenues.forEach((dollars, h) => {
         buckets.all[h] += dollars;
         buckets[wk][h] += dollars;

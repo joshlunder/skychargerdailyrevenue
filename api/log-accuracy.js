@@ -96,21 +96,26 @@ export default async function handler(req, res) {
 
     const offset = utcOffsetString(tz, yesterdayDate);
 
-    // Fetch all 24 hours of yesterday in parallel
-    const hourRevenues = await Promise.all(
-      Array.from({ length: 24 }, (_, h) => {
+    // Fetch all 24 hours of yesterday in batches of 5 to avoid rate-limiting.
+    const hourRevenues = [];
+    for (let i = 0; i < 24; i += 5) {
+      const batch = Array.from({ length: Math.min(5, 24 - i) }, (_, j) => i + j);
+      const results = await Promise.all(batch.map(async h => {
         const start = `${dateStr}T${String(h).padStart(2, "0")}:00:00${offset}`;
         const end = h === 23
           ? `${todayStr}T00:00:00${offset}`
           : `${dateStr}T${String(h + 1).padStart(2, "0")}:00:00${offset}`;
         const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
           `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
-        return fetch(url, { headers: { authorization: `Bearer ${token}` } })
-          .then(r => r.ok ? r.json() : null)
-          .then(j => (j?.aggregateStats?.totalRevenue || 0) / 100)
-          .catch(() => 0);
-      })
-    );
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+          if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+          if (attempt === 0) await new Promise(res => setTimeout(res, 300));
+        }
+        return 0;
+      }));
+      hourRevenues.push(...results);
+    }
 
     const actual = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
 
