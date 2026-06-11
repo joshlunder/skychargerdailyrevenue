@@ -475,9 +475,9 @@ function updateDot(){
   const ageMin=(Date.now()-new Date(TODAY.fetchedAt).getTime())/60000;
   dot.className='live-dot '+(ageMin<10?'fresh':'stale');
 }
-function BASELINE_TZ(){return 'America/New_York'}
+function BASELINE_TZ(){return 'America/Los_Angeles'}
 function guessHour(){
-  const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hour12:false}).format(new Date());
+  const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',hour12:false}).format(new Date());
   return parseInt(h,10)%24;
 }
 function typicalByNowFallback(){const p=BASELINE.profile.all;let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s}
