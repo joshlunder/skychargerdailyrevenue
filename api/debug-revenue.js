@@ -53,6 +53,19 @@ export default async function handler(req, res) {
     const token = await getToken();
 
     const now = new Date();
+
+    // If explicit from/to provided, just return that single window's revenue.
+    if (req.query.from && req.query.to) {
+      const r = await rev(token, orgId, req.query.from, req.query.to);
+      res.setHeader("cache-control", "no-store");
+      return res.status(200).json({
+        window: `${req.query.from} → ${req.query.to}`,
+        revenue: r.revenue,
+        totalSessions: r.raw?.totalSessions,
+        totalRevenueCents: r.raw?.totalRevenue,
+      });
+    }
+
     const offset = utcOffsetString(tz, now);
     const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now);
     const nowHour = parseInt(
