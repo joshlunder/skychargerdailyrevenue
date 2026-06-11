@@ -217,10 +217,11 @@ function compute(){
 function render(){
   const c=compute(); if(!c)return;
   $('projection').innerHTML = '$'+Math.floor(c.projected).toLocaleString();
-  const pct=Math.round((c.pace-1)*100);
+  // Compare projected end-of-day total against a typical full day — the bottom-line signal.
+  const dayPct = c.fullTypical>0 ? Math.round((c.projected/c.fullTypical-1)*100) : 0;
   const pb=$('pace'); pb.style.display='inline-block';
-  if(c.pace>=1){pb.className='pace up';pb.textContent=`running ${pct>=0?'+':''}${pct}% vs typical`;}
-  else{pb.className='pace down';pb.textContent=`running ${pct}% vs typical`;}
+  if(dayPct>=0){pb.className='pace up';pb.textContent=`projected +${dayPct}% vs typical day`;}
+  else{pb.className='pace down';pb.textContent=`projected ${dayPct}% vs typical day`;}
   const confPct=Math.round(c.confidence*100);
   $('sub').textContent=`As of the ${labelHour(c.nowHour)} hour, you've taken in ${fmt(c.soFar)}. Only ${confPct}% of a typical day's revenue has occurred so far — the projection blends your current pace with the expected afternoon pattern as the day fills in.`;
   $('daytype').style.display='flex';
