@@ -35,13 +35,26 @@ async function getToken() {
 }
 
 // Returns revenue in dollars for a UTC ISO window using the org/stats endpoint.
+// Retries once on failure to handle transient rate limits.
 async function revenueForWindow(token, orgId, fromISO, toISO) {
   const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
     `&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`;
-  const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (!r.ok) throw new Error(`stats call failed (${r.status})`);
-  const j = await r.json();
-  return (j.aggregateStats?.totalRevenue || 0) / 100; // cents → dollars
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+    if (attempt === 0) await new Promise(res => setTimeout(res, 300));
+  }
+  return 0;
+}
+
+// Run async tasks in batches to avoid rate-limiting on parallel calls.
+async function batchedMap(items, batchSize, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    results.push(...await Promise.all(batch.map(fn)));
+  }
+  return results;
 }
 
 // UTC offset string for the timezone right now, e.g. "-07:00"
@@ -92,13 +105,10 @@ export default async function handler(req, res) {
     const nowHour = currentLocalHour(tz);
     const dateStr = localDateString(tz);
 
-    // Fetch all hours in parallel to stay within 30s timeout
+    // Fetch hours in batches of 5 to avoid rate-limiting, with retry on each call.
     const hours = Array.from({ length: nowHour + 1 }, (_, h) => h);
-    const revenues = await Promise.all(
-      hours.map(h =>
-        revenueForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
-          .catch(() => 0)
-      )
+    const revenues = await batchedMap(hours, 5, h =>
+      revenueForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
     );
 
     let running = 0;
