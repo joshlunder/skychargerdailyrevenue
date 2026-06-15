@@ -58,14 +58,6 @@
   .pace.up{background:var(--green)}
   .pace.down{background:#fde8b3;color:#92600a}
 
-  .daytype{margin-top:18px;display:flex;gap:8px;flex-wrap:wrap}
-  .daytype button{
-    background:transparent;border:1px solid var(--line);color:var(--muted);
-    font-family:'Spline Sans Mono',monospace;font-size:11px;
-    padding:6px 14px;border-radius:999px;cursor:pointer;transition:all .15s
-  }
-  .daytype button:hover{border-color:var(--blue-vivid);color:var(--ink)}
-  .daytype button.active{background:var(--blue);border-color:var(--blue);color:var(--ink);font-weight:500}
   .profile-desc{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
 
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:32px}
@@ -128,11 +120,6 @@
     <div class="projection" id="projection"><span class="loading">loading…</span></div>
     <div class="pace" id="pace" style="display:none"></div>
     <div class="sub" id="sub"></div>
-    <div class="daytype" id="daytype" style="display:none">
-      <button data-t="auto" class="active">Today</button>
-      <button data-t="weekday">Weekday</button>
-      <button data-t="weekend">Weekend</button>
-    </div>
     <div class="profile-desc" id="profile-desc" style="display:none"></div>
   </section>
 
@@ -174,7 +161,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script type="module">
 const $ = (id)=>document.getElementById(id);
-let BASELINE=null, TODAY=null, dayType='auto';
+let BASELINE=null, TODAY=null;
 let intradayChart=null, weekChart=null, _nowHour=0, _accuracyLog=null;
 
 function fmt(n){return '$'+Math.round(n).toLocaleString()}
@@ -182,20 +169,12 @@ function nowInTZ(tz){
   try{return new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'2-digit',minute:'2-digit',weekday:'short',hour12:true}).format(new Date())}
   catch(e){return new Date().toLocaleTimeString()}
 }
-function isWeekendTZ(tz){
-  const wd=new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'short'}).format(new Date());
-  return wd==='Sat'||wd==='Sun';
-}
-
 function currentDOW(tz){
   return new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'short'}).format(new Date()).toLowerCase();
 }
 function pickProfile(tz){
-  if(dayType==='weekday')return BASELINE.profile.weekday;
-  if(dayType==='weekend')return BASELINE.profile.weekend;
   const dow=currentDOW(tz);
-  if(BASELINE.profile[dow]) return BASELINE.profile[dow];
-  return isWeekendTZ(tz)?BASELINE.profile.weekend:BASELINE.profile.weekday;
+  return BASELINE.profile[dow]||BASELINE.profile.all;
 }
 
 function compute(){
@@ -224,27 +203,21 @@ function render(){
   else{pb.className='pace down';pb.textContent=`projected ${dayPct}% vs typical day`;}
   const confPct=Math.round(c.confidence*100);
   $('sub').textContent=`As of the ${labelHour(c.nowHour)} hour, you've taken in ${fmt(c.soFar)}. Only ${confPct}% of a typical day's revenue has occurred so far — the projection blends your current pace with the expected afternoon pattern as the day fills in.`;
-  $('daytype').style.display='flex';
   $('stats').innerHTML=[
     ['Revenue so far',fmt(c.soFar)],
     ['Typical by now',fmt(c.typicalByNow)],
     ['Typical full day',fmt(c.fullTypical)],
     ['Still to come',fmt(Math.max(0,c.projected-c.soFar))],
   ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  const typLabel = dayType==='weekday' ? 'Weekday'
-                 : dayType==='weekend' ? 'Weekend'
-                 : (DOW_NAMES[currentDOW(c.tz)] || 'day');
+  const typLabel = DOW_NAMES[currentDOW(c.tz)] || 'day';
   drawChart(c, typLabel);
   render7DayChart(_accuracyLog);
   $('chart-title').textContent = `Today vs a typical ${typLabel}`;
   $('chart-legend-typical').textContent = `Typical ${typLabel}`;
-  const profLabel = dayType==='auto' ? currentDOW(c.tz) : dayType;
   const descEl=$('profile-desc');
-  if(dayType==='weekday') descEl.textContent='Projection compared against a typical weekday';
-  else if(dayType==='weekend') descEl.textContent='Projection compared against a typical weekend';
-  else descEl.textContent=`Projection compared against a typical ${DOW_NAMES[currentDOW(c.tz)]||'day'}`;
+  descEl.textContent=`Projection compared against a typical ${typLabel}`;
   descEl.style.display='block';
-  $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Projection uses the <strong style="color:var(--ink)">${profLabel}</strong> day-of-week profile; accuracy improves as the day progresses.`;
+  $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Accuracy improves as the day progresses.`;
 }
 
 function labelHour(h){const ap=h<12?'AM':'PM';const x=h%12===0?12:h%12;return `${x}${ap}`}
@@ -538,12 +511,6 @@ async function loadAccuracy(){
   }catch(e){}
 }
 
-$('daytype').addEventListener('click',ev=>{
-  if(ev.target.tagName!=='BUTTON')return;
-  dayType=ev.target.dataset.t;
-  [...$('daytype').children].forEach(b=>b.classList.toggle('active',b===ev.target));
-  render();
-});
 
 function tick(){$('clock-time').textContent=nowInTZ(BASELINE_TZ());updateDot();}
 tick();setInterval(tick,1000*30);
