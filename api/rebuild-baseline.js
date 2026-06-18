@@ -96,9 +96,7 @@ export default async function handler(req, res) {
 
     for (let d = 1; d <= WINDOW_DAYS; d++) {
       const refDate = new Date(Date.now() - d * 86400000);
-      const nextDate = new Date(Date.now() - (d - 1) * 86400000);
       const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(refDate);
-      const nextDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(nextDate);
 
       if (isHoliday(dateStr)) continue;
 
@@ -106,16 +104,18 @@ export default async function handler(req, res) {
       const wk = isWeekend ? "weekend" : "weekday";
       ndays.all++; ndays[wk]++; ndays[dow]++;
 
-      const offset = utcOffsetString(tz, refDate);
+      // Day period: 11:30pm of (d+1) days ago → 11:30pm of d days ago
+      const prevDate = new Date(Date.now() - (d + 1) * 86400000);
+      const prevDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(prevDate);
+      const prevOffset = utcOffsetString(tz, prevDate);
+      const dayStart = new Date(`${prevDateStr}T23:30:00${prevOffset}`).getTime();
       const hours = Array.from({ length: 24 }, (_, h) => h);
       const hourRevenues = [];
       for (let i = 0; i < hours.length; i += 5) {
         const batch = hours.slice(i, i + 5);
         const results = await Promise.all(batch.map(async h => {
-          const start = `${dateStr}T${String(h).padStart(2, "0")}:00:00${offset}`;
-          const end = h === 23
-            ? `${nextDateStr}T00:00:00${offset}`
-            : `${dateStr}T${String(h + 1).padStart(2, "0")}:00:00${offset}`;
+          const start = new Date(dayStart + h * 3600000).toISOString();
+          const end   = new Date(dayStart + (h + 1) * 3600000).toISOString();
           const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
             `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
           for (let attempt = 0; attempt < 2; attempt++) {

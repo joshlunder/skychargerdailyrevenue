@@ -82,11 +82,11 @@ export default async function handler(req, res) {
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
 
-    // Log yesterday — it's fully complete by the time this runs (5am ET)
+    // Log the completed day: 11:30pm two nights ago → 11:30pm last night.
+    // Named after yesterday's calendar date. Cron runs at 5am UTC (1am ET), well after cutoff.
     const yesterdayDate = new Date(Date.now() - 86400000);
-    const todayDate = new Date();
+    const twoDaysAgo = new Date(Date.now() - 2 * 86400000);
     const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(yesterdayDate);
-    const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(todayDate);
     const wdShort = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(yesterdayDate);
     const dow = DOW_MAP[wdShort];
 
@@ -94,17 +94,18 @@ export default async function handler(req, res) {
       return res.status(200).json({ skipped: dateStr, reason: "holiday" });
     }
 
-    const offset = utcOffsetString(tz, yesterdayDate);
+    // Day start: 11:30pm of two nights ago
+    const prevDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(twoDaysAgo);
+    const prevOffset = utcOffsetString(tz, twoDaysAgo);
+    const dayStart = new Date(`${prevDateStr}T23:30:00${prevOffset}`).getTime();
 
-    // Fetch all 24 hours of yesterday in batches of 5 to avoid rate-limiting.
+    // Fetch all 24 hours of the completed day in batches of 5 to avoid rate-limiting.
     const hourRevenues = [];
     for (let i = 0; i < 24; i += 5) {
       const batch = Array.from({ length: Math.min(5, 24 - i) }, (_, j) => i + j);
       const results = await Promise.all(batch.map(async h => {
-        const start = `${dateStr}T${String(h).padStart(2, "0")}:00:00${offset}`;
-        const end = h === 23
-          ? `${todayStr}T00:00:00${offset}`
-          : `${dateStr}T${String(h + 1).padStart(2, "0")}:00:00${offset}`;
+        const start = new Date(dayStart + h * 3600000).toISOString();
+        const end   = new Date(dayStart + (h + 1) * 3600000).toISOString();
         const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
           `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
         for (let attempt = 0; attempt < 2; attempt++) {
