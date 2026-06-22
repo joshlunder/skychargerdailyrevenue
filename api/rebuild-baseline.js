@@ -4,6 +4,8 @@ const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
 const API_BASE = "https://www.api.mothership.electriceratechnologies.com";
 const WINDOW_DAYS = 35;
+const RECENT_DAYS = 14;
+const RECENT_WEIGHT = 3;
 
 async function getToken() {
   const body = new URLSearchParams({
@@ -92,7 +94,7 @@ export default async function handler(req, res) {
 
     const DAYS = ["all", "weekday", "weekend", "mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     const buckets = Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
-    const ndays = Object.fromEntries(DAYS.map(k => [k, 0]));
+    const wdays = Object.fromEntries(DAYS.map(k => [k, 0]));
 
     for (let d = 1; d <= WINDOW_DAYS; d++) {
       const refDate = new Date(Date.now() - d * 86400000);
@@ -102,7 +104,8 @@ export default async function handler(req, res) {
 
       const { dow, isWeekend } = dayOfWeek(tz, d);
       const wk = isWeekend ? "weekend" : "weekday";
-      ndays.all++; ndays[wk]++; ndays[dow]++;
+      const weight = d <= RECENT_DAYS ? RECENT_WEIGHT : 1;
+      wdays.all += weight; wdays[wk] += weight; wdays[dow] += weight;
 
       // Day period: 11:30pm of (d+1) days ago → 11:30pm of d days ago
       const prevDate = new Date(Date.now() - (d + 1) * 86400000);
@@ -128,18 +131,18 @@ export default async function handler(req, res) {
         hourRevenues.push(...results);
       }
       hourRevenues.forEach((dollars, h) => {
-        buckets.all[h] += dollars;
-        buckets[wk][h] += dollars;
-        buckets[dow][h] += dollars;
+        buckets.all[h] += dollars * weight;
+        buckets[wk][h] += dollars * weight;
+        buckets[dow][h] += dollars * weight;
       });
     }
 
     const profile = {};
     for (const k of DAYS) {
-      profile[k] = buckets[k].map(v => Number((v / Math.max(1, ndays[k])).toFixed(2)));
+      profile[k] = buckets[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
     }
     const out = {
-      meta: { source: `rolling ${WINDOW_DAYS} days (auto, holidays excluded)`, generated: new Date().toISOString(), days: WINDOW_DAYS },
+      meta: { source: `rolling ${WINDOW_DAYS} days (recency-weighted: last ${RECENT_DAYS}d at ${RECENT_WEIGHT}x, holidays excluded)`, generated: new Date().toISOString(), days: WINDOW_DAYS },
       profile,
     };
 
