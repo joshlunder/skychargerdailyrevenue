@@ -220,7 +220,7 @@ function render(){
   $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Accuracy improves as the day progresses.`;
 }
 
-function labelHour(h){const s=(h+23)%24;const ap=s<12?'AM':'PM';const x=s%12===0?12:s%12;return `${x}${ap}`}
+function labelHour(h){const ap=h<12?'AM':'PM';const x=h%12===0?12:h%12;return `${x}${ap}`}
 
 const nowLinePlugin = {
   id: 'nowLine',
@@ -451,10 +451,8 @@ function updateDot(){
 }
 function BASELINE_TZ(){return 'America/New_York'}
 function guessHour(){
-  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',minute:'2-digit',hour12:false}).formatToParts(new Date());
-  const H=parseInt(parts.find(p=>p.type==='hour').value)%24;
-  const M=parseInt(parts.find(p=>p.type==='minute').value);
-  return Math.floor(((H*60+M)-(23*60+30)+1440)%1440/60);
+  const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hour12:false}).format(new Date());
+  return parseInt(h,10)%24;
 }
 function typicalByNowFallback(){const p=BASELINE.profile.all;let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s}
 function showErr(m){const e=$('err');e.style.display='block';e.textContent=m}

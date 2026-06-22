@@ -107,18 +107,18 @@ export default async function handler(req, res) {
       const weight = d <= RECENT_DAYS ? RECENT_WEIGHT : 1;
       wdays.all += weight; wdays[wk] += weight; wdays[dow] += weight;
 
-      // Day period: 11:30pm of (d+1) days ago → 11:30pm of d days ago
-      const prevDate = new Date(Date.now() - (d + 1) * 86400000);
-      const prevDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(prevDate);
-      const prevOffset = utcOffsetString(tz, prevDate);
-      const dayStart = new Date(`${prevDateStr}T23:30:00${prevOffset}`).getTime();
+      const nextDate = new Date(Date.now() - (d - 1) * 86400000);
+      const nextDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(nextDate);
+      const offset = utcOffsetString(tz, refDate);
       const hours = Array.from({ length: 24 }, (_, h) => h);
       const hourRevenues = [];
       for (let i = 0; i < hours.length; i += 5) {
         const batch = hours.slice(i, i + 5);
         const results = await Promise.all(batch.map(async h => {
-          const start = new Date(dayStart + h * 3600000).toISOString();
-          const end   = new Date(dayStart + (h + 1) * 3600000).toISOString();
+          const start = `${dateStr}T${String(h).padStart(2, "0")}:00:00${offset}`;
+          const end = h === 23
+            ? `${nextDateStr}T00:00:00${offset}`
+            : `${dateStr}T${String(h + 1).padStart(2, "0")}:00:00${offset}`;
           const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
             `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
           for (let attempt = 0; attempt < 2; attempt++) {

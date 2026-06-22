@@ -57,29 +57,44 @@ async function batchedMap(items, batchSize, fn) {
   return results;
 }
 
-// Revenue day: 11:30pm ET → 11:30pm ET (hour 0 = 11:30pm–12:30am, hour 23 = 10:30pm–11:30pm).
-
-// Returns the start timestamp (ms) of the current 11:30pm-to-11:30pm revenue day.
-function dayStartMs(tz) {
+// UTC offset string for the timezone right now, e.g. "-07:00"
+function utcOffsetString(tz) {
   const now = new Date();
+  const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz, hour: "numeric", minute: "2-digit", hour12: false,
   }).formatToParts(now);
-  const H = parseInt(parts.find(p => p.type === "hour").value) % 24;
-  const M = parseInt(parts.find(p => p.type === "minute").value);
-  const minSinceStart = ((H * 60 + M) - (23 * 60 + 30) + 1440) % 1440;
-  return now.getTime() - minSinceStart * 60000;
+  const localH = parseInt(parts.find(p => p.type === "hour").value) +
+    parseInt(parts.find(p => p.type === "minute").value) / 60;
+  let offset = Math.round(localH - utcH);
+  if (offset > 12) offset -= 24;
+  if (offset < -12) offset += 24;
+  const sign = offset >= 0 ? "+" : "-";
+  return `${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
 }
 
-// Hour index (0–23) within the current 11:30pm-to-11:30pm day.
+// ISO string for a given local hour, including tz offset.
+// For hour 24 (end of day), rolls to next day midnight to avoid zero-length windows.
+function localHourISO(tz, dateStr, hour) {
+  const offset = utcOffsetString(tz);
+  if (hour >= 24) {
+    const nextDay = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
+      .format(new Date(new Date().getTime() + 86400000));
+    return `${nextDay}T00:00:00${offset}`;
+  }
+  return `${dateStr}T${String(hour).padStart(2, "0")}:00:00${offset}`;
+}
+
+// Today's date string in the site timezone, e.g. "2026-06-05"
+function localDateString(tz) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
+}
+
 function currentLocalHour(tz) {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, hour: "numeric", minute: "2-digit", hour12: false,
-  }).formatToParts(now);
-  const H = parseInt(parts.find(p => p.type === "hour").value) % 24;
-  const M = parseInt(parts.find(p => p.type === "minute").value);
-  return Math.floor(((H * 60 + M) - (23 * 60 + 30) + 1440) % 1440 / 60);
+  const h = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour: "numeric", hour12: false,
+  }).format(new Date());
+  return parseInt(h, 10) % 24;
 }
 
 export default async function handler(req, res) {
@@ -88,16 +103,12 @@ export default async function handler(req, res) {
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
     const nowHour = currentLocalHour(tz);
-    const start = dayStartMs(tz);
+    const dateStr = localDateString(tz);
 
     // Fetch hours in batches of 5 to avoid rate-limiting, with retry on each call.
     const hours = Array.from({ length: nowHour + 1 }, (_, h) => h);
     const revenues = await batchedMap(hours, 5, h =>
-      revenueForWindow(
-        token, orgId,
-        new Date(start + h * 3600000).toISOString(),
-        new Date(start + (h + 1) * 3600000).toISOString()
-      )
+      revenueForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
     );
 
     let running = 0;
