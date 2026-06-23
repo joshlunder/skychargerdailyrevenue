@@ -308,6 +308,7 @@ function drawChart(c, typLabel){
       plugins: {
         legend: {display:false},
         tooltip: {
+          itemSort: (a, b) => a.dataset.label === 'Today' ? -1 : 1,
           callbacks: {
             label: item => `${item.dataset.label}: $${Math.round(item.parsed.y).toLocaleString()}`
           }
