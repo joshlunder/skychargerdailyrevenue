@@ -330,7 +330,7 @@ function drawChart(c, typLabel){
           ticks: {
             color:'#8591a2',
             font:{size:10},
-            callback: v => '$'+(v>=1000 ? Math.round(v/1000)+'k' : Math.round(v))
+            callback: v => '$'+(v>=1000 ? (v/1000).toFixed(1).replace(/\.0$/,'')+'k' : Math.round(v))
           }
         }
       }
@@ -415,7 +415,7 @@ function render7DayChart(log){
           ticks: {
             color:'#8591a2',
             font:{size:10},
-            callback: v => '$'+(v>=1000 ? Math.round(v/1000)+'k' : Math.round(v))
+            callback: v => '$'+(v>=1000 ? (v/1000).toFixed(1).replace(/\.0$/,'')+'k' : Math.round(v))
           }
         }
       }
