@@ -1,7 +1,7 @@
 // api/today-sites.js — per-site revenue totals for today
-// Two parallel calls:
-//   GET /api/v1/site/organization/{orgId}       → site names + IDs
-//   POST /api/v1/site/org/{orgId}/site_stats    → revenue per site (midnight → now)
+// Fetches site list, then calls GET /api/v1/organization/stats?siteIds=X per site
+// (same endpoint used by api/today.js, just scoped to one site at a time).
+// Site calls run in parallel batches.
 
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
@@ -47,6 +47,21 @@ function localDateString(tz) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 }
 
+function currentLocalHour(tz) {
+  const h = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour: "numeric", hour12: false,
+  }).format(new Date());
+  return parseInt(h, 10) % 24;
+}
+
+async function revenueForSite(token, siteId, fromISO, toISO) {
+  const url = `${API_BASE}/api/v1/organization/stats?siteIds=${siteId}` +
+    `&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`;
+  const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (!r.ok) return 0;
+  return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+}
+
 export default async function handler(req, res) {
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
@@ -55,57 +70,46 @@ export default async function handler(req, res) {
 
     const dateStr = localDateString(tz);
     const offset = utcOffsetString(tz);
+    const nowHour = currentLocalHour(tz);
+
     const from = `${dateStr}T00:00:00${offset}`;
-    const to = new Date().toISOString();
+    // to = end of current hour (matches how today.js accumulates)
+    const toHour = Math.min(nowHour + 1, 24);
+    const to = toHour < 24
+      ? `${dateStr}T${String(toHour).padStart(2, "0")}:00:00${offset}`
+      : (() => {
+          const d = new Date(new Date().getTime() + 86400000);
+          const next = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(d);
+          return `${next}T00:00:00${offset}`;
+        })();
 
-    const [sitesResp, statsResp] = await Promise.all([
-      fetch(`${API_BASE}/api/v1/site/list/${orgId}`, {
-        headers: { authorization: `Bearer ${token}` },
-      }),
-      fetch(`${API_BASE}/api/v1/site/org/${orgId}/site_stats`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify([from, to]),
-      }),
-    ]);
-
+    // Get site list
+    const sitesResp = await fetch(`${API_BASE}/api/v1/site/list/${orgId}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
     if (!sitesResp.ok) {
       const body = await sitesResp.text().catch(() => "");
       throw new Error(`sites list failed: ${sitesResp.status} — ${body.slice(0, 200)}`);
     }
-    if (!statsResp.ok) {
-      const body = await statsResp.text().catch(() => "");
-      throw new Error(`site stats failed: ${statsResp.status} — ${body.slice(0, 200)}`);
-    }
-
     const sitesData = await sitesResp.json();
-    const statsRaw = await statsResp.json();
-    // Debug: surface the raw stats structure
-    const _debug = JSON.stringify(statsRaw).slice(0, 500);
-    const statsArray = Array.isArray(statsRaw) ? statsRaw : [statsRaw];
-    const siteRevenueStats = statsArray[0]?.siteRevenueStats ?? [];
+    const sitesList = Array.isArray(sitesData) ? sitesData : (sitesData.sites ?? []);
+    const activeSites = sitesList.filter(s => s.active !== false);
 
-    const revenueById = Object.fromEntries(
-      siteRevenueStats.map(s => [s.id, s.revenueAmount / (s.precision || 100)])
+    // Fetch revenue per site in parallel (all at once — typically <15 sites)
+    const revenues = await Promise.all(
+      activeSites.map(s => revenueForSite(token, s.id, from, to))
     );
 
-    // sitesData may be { sites: [...] } or a raw array depending on endpoint
-    const sitesList = Array.isArray(sitesData) ? sitesData : (sitesData.sites ?? []);
-
-    const sites = sitesList
-      .filter(s => s.active !== false)
-      .map(s => ({
+    const sites = activeSites
+      .map((s, i) => ({
         id: s.id,
         name: s.name,
-        revenueToday: Number((revenueById[s.id] ?? 0).toFixed(2)),
+        revenueToday: Number(revenues[i].toFixed(2)),
       }))
       .sort((a, b) => b.revenueToday - a.revenueToday);
 
     res.setHeader("cache-control", "s-maxage=300");
-    res.status(200).json({ sites, fetchedAt: new Date().toISOString(), _debug });
+    res.status(200).json({ sites, fetchedAt: new Date().toISOString() });
   } catch (err) {
     const code = err.code || "ERROR";
     res.status(code === "AUTH_INVALID" ? 401 : 500)
