@@ -59,7 +59,7 @@ export default async function handler(req, res) {
     const to = new Date().toISOString();
 
     const [sitesResp, statsResp] = await Promise.all([
-      fetch(`${API_BASE}/api/v1/site/organization/${orgId}?take=1000&skip=0`, {
+      fetch(`${API_BASE}/api/v1/site/list/${orgId}`, {
         headers: { authorization: `Bearer ${token}` },
       }),
       fetch(`${API_BASE}/api/v1/site/org/${orgId}/site_stats`, {
@@ -89,8 +89,11 @@ export default async function handler(req, res) {
       siteRevenueStats.map(s => [s.id, s.revenueAmount / (s.precision || 100)])
     );
 
-    const sites = sitesData
-      .filter(s => s.active)
+    // sitesData may be { sites: [...] } or a raw array depending on endpoint
+    const sitesList = Array.isArray(sitesData) ? sitesData : (sitesData.sites ?? []);
+
+    const sites = sitesList
+      .filter(s => s.active !== false)
       .map(s => ({
         id: s.id,
         name: s.name,
