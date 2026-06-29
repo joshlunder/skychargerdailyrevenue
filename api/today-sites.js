@@ -82,7 +82,10 @@ export default async function handler(req, res) {
     }
 
     const sitesData = await sitesResp.json();
-    const statsArray = await statsResp.json();
+    const statsRaw = await statsResp.json();
+    // Debug: surface the raw stats structure
+    const _debug = JSON.stringify(statsRaw).slice(0, 500);
+    const statsArray = Array.isArray(statsRaw) ? statsRaw : [statsRaw];
     const siteRevenueStats = statsArray[0]?.siteRevenueStats ?? [];
 
     const revenueById = Object.fromEntries(
@@ -102,7 +105,7 @@ export default async function handler(req, res) {
       .sort((a, b) => b.revenueToday - a.revenueToday);
 
     res.setHeader("cache-control", "s-maxage=300");
-    res.status(200).json({ sites, fetchedAt: new Date().toISOString() });
+    res.status(200).json({ sites, fetchedAt: new Date().toISOString(), _debug });
   } catch (err) {
     const code = err.code || "ERROR";
     res.status(code === "AUTH_INVALID" ? 401 : 500)
