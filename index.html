@@ -90,10 +90,15 @@
   .loading{color:var(--muted);font-family:'Spline Sans Mono',monospace;font-size:14px}
 
   .accuracycard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:32px}
-  .accuracycard-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
-  .accuracycard h2{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--ink);margin:0}
+  .accuracycard-header{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;user-select:none}
+  .accuracycard-header:hover h2{color:var(--muted)}
+  .acc-toggle-row{display:flex;align-items:center;gap:8px}
+  .acc-toggle-icon{font-size:10px;color:var(--muted);transition:transform .18s;display:inline-block}
+  .acc-toggle-icon.open{transform:rotate(90deg)}
+  .accuracycard h2{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--ink);margin:0;transition:color .15s}
   .acc-range-select{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 8px;cursor:pointer;outline:none}
   .acc-range-select:hover{border-color:#b0b8c4}
+  .acc-body{margin-top:14px}
   .accuracycard p{color:var(--muted);font-size:13px;margin-bottom:18px}
   .acc-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .acc-table{width:100%;border-collapse:collapse;font-size:12px;font-family:'Spline Sans Mono',monospace;white-space:nowrap}
@@ -124,7 +129,6 @@
     <div class="projection" id="projection"><span class="loading">loading…</span></div>
     <div class="pace" id="pace" style="display:none"></div>
     <div class="sub" id="sub"></div>
-    <div class="profile-desc" id="profile-desc" style="display:none"></div>
   </section>
 
   <section class="grid" id="stats"></section>
@@ -161,16 +165,21 @@
   </div>
 
   <section class="accuracycard" id="accuracy-section" style="display:none">
-    <div class="accuracycard-header">
-      <h2>Projection accuracy</h2>
-      <select class="acc-range-select" id="acc-range">
+    <div class="accuracycard-header" id="acc-toggle">
+      <div class="acc-toggle-row">
+        <span class="acc-toggle-icon" id="acc-toggle-icon">▶</span>
+        <h2>Projection accuracy</h2>
+      </div>
+      <select class="acc-range-select" id="acc-range" style="display:none">
         <option value="7">Last 7 days</option>
         <option value="14" selected>Last 14 days</option>
         <option value="30">Last 30 days</option>
       </select>
     </div>
-    <p>How close end-of-day projections were at each 2-hour check-in vs. what actually happened. Logged automatically each night.</p>
-    <div class="acc-wrap" id="accuracy-table-wrap"></div>
+    <div class="acc-body" id="acc-body" style="display:none">
+      <p>How close end-of-day projections were at each 2-hour check-in vs. what actually happened. Logged automatically each night.</p>
+      <div class="acc-wrap" id="accuracy-table-wrap"></div>
+    </div>
   </section>
 
   <footer id="foot"></footer>
@@ -220,21 +229,17 @@ function render(){
   if(dayPct>=0){pb.className='pace up';pb.textContent=`projected +${dayPct}% vs typical day`;}
   else{pb.className='pace down';pb.textContent=`projected ${dayPct}% vs typical day`;}
   const confPct=Math.round(c.confidence*100);
-  $('sub').textContent=`As of the ${labelHour(c.nowHour)} hour, you've taken in ${fmt(c.soFar)}. Only ${confPct}% of a typical day's revenue has occurred so far — the projection blends your current pace with the expected afternoon pattern as the day fills in.`;
+  $('sub').textContent=`${confPct}% of the day complete · confidence builds as the afternoon progresses.`;
   $('stats').innerHTML=[
     ['Revenue so far',fmt(c.soFar)],
     ['Typical by now',fmt(c.typicalByNow)],
     ['Typical full day',fmt(c.fullTypical)],
-    ['Still to come',fmt(Math.max(0,c.projected-c.soFar))],
   ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   const typLabel = DOW_NAMES[currentDOW(c.tz)] || 'day';
   drawChart(c, typLabel);
   render7DayChart(_accuracyLog);
   $('chart-title').textContent = `Today vs a typical ${typLabel}`;
   $('chart-legend-typical').textContent = `Typical ${typLabel}`;
-  const descEl=$('profile-desc');
-  descEl.textContent=`Projection compared against a typical ${typLabel}`;
-  descEl.style.display='block';
   $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Accuracy improves as the day progresses.`;
 }
 
@@ -534,6 +539,14 @@ async function loadAccuracy(){
     render7DayChart(data);
     $('week-range')?.addEventListener('change',()=>render7DayChart(_accuracyLog));
     $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
+    $('acc-toggle')?.addEventListener('click',(e)=>{
+      if(e.target.closest('select'))return;
+      const body=$('acc-body'), icon=$('acc-toggle-icon'), sel=$('acc-range');
+      const open=body.style.display!=='none';
+      body.style.display=open?'none':'block';
+      sel.style.display=open?'none':'';
+      icon.classList.toggle('open',!open);
+    });
   }catch(e){}
 }
 
