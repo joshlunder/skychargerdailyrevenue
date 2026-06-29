@@ -89,7 +89,10 @@
   .loading{color:var(--muted);font-family:'Spline Sans Mono',monospace;font-size:14px}
 
   .accuracycard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:32px}
-  .accuracycard h2{font-size:15px;font-weight:700;letter-spacing:.02em;margin-bottom:4px;color:var(--ink)}
+  .accuracycard-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+  .accuracycard h2{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--ink);margin:0}
+  .acc-range-select{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 8px;cursor:pointer;outline:none}
+  .acc-range-select:hover{border-color:#b0b8c4}
   .accuracycard p{color:var(--muted);font-size:13px;margin-bottom:18px}
   .acc-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .acc-table{width:100%;border-collapse:collapse;font-size:12px;font-family:'Spline Sans Mono',monospace;white-space:nowrap}
@@ -150,7 +153,14 @@
   </div>
 
   <section class="accuracycard" id="accuracy-section" style="display:none">
-    <h2>Projection accuracy</h2>
+    <div class="accuracycard-header">
+      <h2>Projection accuracy</h2>
+      <select class="acc-range-select" id="acc-range">
+        <option value="7">Last 7 days</option>
+        <option value="14" selected>Last 14 days</option>
+        <option value="30">Last 30 days</option>
+      </select>
+    </div>
     <p>How close end-of-day projections were at each 2-hour check-in vs. what actually happened. Logged automatically each night.</p>
     <div class="acc-wrap" id="accuracy-table-wrap"></div>
   </section>
@@ -473,7 +483,8 @@ function errClass(pct){const a=Math.abs(pct);return a<=5?'err-good':a<=15?'err-o
 
 function renderAccuracy(log){
   if(!log||!log.length)return;
-  const recent=[...log].reverse().slice(0,14);
+  const limit=parseInt($('acc-range')?.value||'14',10);
+  const recent=[...log].reverse().slice(0,limit);
   const avgErrs=SNAP_HOURS.map(h=>{
     const vals=recent.filter(e=>e.snapshots[h]!=null&&e.actual>0).map(e=>(e.snapshots[h]-e.actual)/e.actual*100);
     if(!vals.length)return null;
@@ -510,6 +521,7 @@ async function loadAccuracy(){
     _accuracyLog=data;
     renderAccuracy(data);
     render7DayChart(data);
+    $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
   }catch(e){}
 }
 
