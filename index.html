@@ -73,7 +73,8 @@
   @media(max-width:640px){.chartrow{grid-template-columns:1fr}}
 
   .chartcard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:32px}
-  .chartcard h2{font-size:15px;font-weight:700;letter-spacing:.02em;margin-bottom:4px;color:var(--ink)}
+  .chartcard-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+  .chartcard h2{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--ink);margin:0}
   .chartcard p{color:var(--muted);font-size:13px;margin-bottom:18px}
   .legend{display:flex;gap:20px;margin-top:14px;font-size:12px;color:var(--muted);font-family:'Spline Sans Mono',monospace}
   .legend i{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px;border-radius:2px}
@@ -139,7 +140,14 @@
       </div>
     </section>
     <section class="chartcard">
-      <h2>Last 7 days vs baseline</h2>
+      <div class="chartcard-header">
+        <h2 id="week-chart-title">Last 7 days vs baseline</h2>
+        <select class="acc-range-select" id="week-range">
+          <option value="7" selected>Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+      </div>
       <p>Daily revenue vs expected baseline — green when above, amber when below.</p>
       <div style="position:relative;height:260px">
         <canvas id="week-chart"></canvas>
@@ -357,7 +365,10 @@ function render7DayChart(log){
   }
   if (empty) empty.style.display = 'none';
 
-  const recent = [...log].reverse().slice(0, 7).reverse();
+  const limit = parseInt($('week-range')?.value || '7', 10);
+  const titleEl = $('week-chart-title');
+  if (titleEl) titleEl.textContent = `Last ${limit} days vs baseline`;
+  const recent = [...log].reverse().slice(0, limit).reverse();
   const labels = recent.map(e => e.date.slice(5));
   const baselines = recent.map(e => {
     const prof = BASELINE.profile[e.dow];
@@ -521,6 +532,7 @@ async function loadAccuracy(){
     _accuracyLog=data;
     renderAccuracy(data);
     render7DayChart(data);
+    $('week-range')?.addEventListener('change',()=>render7DayChart(_accuracyLog));
     $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
   }catch(e){}
 }
