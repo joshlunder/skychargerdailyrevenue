@@ -556,7 +556,7 @@ async function load(){
     BASELINE=await (await fetch('/api/baseline')).json();
   }catch(e){ showErr('Could not load baseline data.'); return; }
 
-  // Fire today + sites in parallel
+  // Fire today (fast, 1 call) + sites in parallel
   const todayFetch=fetch('/api/today');
   const sitesFetch=fetch('/api/today-sites');
 
@@ -583,6 +583,14 @@ async function load(){
   updateDot();
   render();
   renderSites();
+
+  // Lazy-load hourly breakdown for the intraday chart (slow — 17 calls)
+  fetch('/api/today-hourly').then(async r=>{
+    if(!r.ok) return;
+    const {hourly, asOfHour}=await r.json();
+    if(TODAY) TODAY.hourly=hourly;
+    drawChart(compute(), DOW_NAMES[currentDOW(TODAY?.timezone||BASELINE_TZ())]||'day');
+  }).catch(()=>{});
 }
 
 function updateDot(){

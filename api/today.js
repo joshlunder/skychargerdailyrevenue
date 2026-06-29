@@ -1,13 +1,6 @@
-// api/today.js — Vercel serverless function
-// Fetches org-level revenue from Electric Era using organization/stats endpoint.
-// All hourly calls run in parallel to stay well within the 30s timeout.
-//
-// Required environment variables:
-//   EE_USERNAME   Electric Era login email
-//   EE_PASSWORD   Electric Era password
-//   EE_CLIENT_ID  OAuth client_id
-//   EE_ORG_ID     organization ID (e.g. 77)
-//   EE_TIMEZONE   IANA tz of the sites, e.g. "America/New_York"
+// api/today.js — fast single-call revenue snapshot
+// One org/stats call from midnight ET to now. Returns revenueSoFar + asOfHour only.
+// Hourly breakdown for the intraday chart is fetched separately by /api/today-hourly.
 
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
@@ -34,30 +27,6 @@ async function getToken() {
   return (await r.json()).access_token;
 }
 
-// Returns revenue in dollars for a UTC ISO window using the org/stats endpoint.
-// Retries once on failure to handle transient rate limits.
-async function revenueForWindow(token, orgId, fromISO, toISO) {
-  const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
-    `&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
-    if (attempt === 0) await new Promise(res => setTimeout(res, 300));
-  }
-  return 0;
-}
-
-// Run async tasks in batches to avoid rate-limiting on parallel calls.
-async function batchedMap(items, batchSize, fn) {
-  const results = [];
-  for (let i = 0; i < items.length; i += batchSize) {
-    const batch = items.slice(i, i + batchSize);
-    results.push(...await Promise.all(batch.map(fn)));
-  }
-  return results;
-}
-
-// UTC offset string for the timezone right now, e.g. "-07:00"
 function utcOffsetString(tz) {
   const now = new Date();
   const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
@@ -73,23 +42,6 @@ function utcOffsetString(tz) {
   return `${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
 }
 
-// ISO string for a given local hour, including tz offset.
-// For hour 24 (end of day), rolls to next day midnight to avoid zero-length windows.
-function localHourISO(tz, dateStr, hour) {
-  const offset = utcOffsetString(tz);
-  if (hour >= 24) {
-    const nextDay = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
-      .format(new Date(new Date().getTime() + 86400000));
-    return `${nextDay}T00:00:00${offset}`;
-  }
-  return `${dateStr}T${String(hour).padStart(2, "0")}:00:00${offset}`;
-}
-
-// Today's date string in the site timezone, e.g. "2026-06-05"
-function localDateString(tz) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
-}
-
 function currentLocalHour(tz) {
   const h = new Intl.DateTimeFormat("en-US", {
     timeZone: tz, hour: "numeric", hour12: false,
@@ -102,27 +54,28 @@ export default async function handler(req, res) {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
-    const nowHour = currentLocalHour(tz);
-    const dateStr = localDateString(tz);
 
-    // Fetch hours in batches of 5 to avoid rate-limiting, with retry on each call.
-    const hours = Array.from({ length: nowHour + 1 }, (_, h) => h);
-    const revenues = await batchedMap(hours, 5, h =>
-      revenueForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
-    );
+    const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
+    const offset = utcOffsetString(tz);
+    const midnight = `${dateStr}T00:00:00${offset}`;
+    const nowISO = new Date().toISOString();
 
-    let running = 0;
-    const hourly = revenues.map((rev, h) => {
-      running += rev;
-      return { hour: h, revenue: Number(rev.toFixed(2)), cumulative: Number(running.toFixed(2)) };
-    });
+    const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
+      `&from=${encodeURIComponent(midnight)}&to=${encodeURIComponent(nowISO)}`;
+    const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!r.ok) {
+      const e = new Error("stats failed: " + r.status);
+      e.code = r.status === 401 || r.status === 403 ? "AUTH_INVALID" : "STATS_ERROR";
+      throw e;
+    }
+    const data = await r.json();
+    const revenueSoFar = (data.aggregateStats?.totalRevenue || 0) / 100;
 
     res.setHeader("cache-control", "s-maxage=300");
     res.status(200).json({
-      asOfHour: nowHour,
+      asOfHour: currentLocalHour(tz),
       timezone: tz,
-      revenueSoFar: Number(running.toFixed(2)),
-      hourly,
+      revenueSoFar: Number(revenueSoFar.toFixed(2)),
       fetchedAt: new Date().toISOString(),
     });
   } catch (err) {
