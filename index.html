@@ -81,6 +81,8 @@
 
   footer{color:var(--muted);font-size:12px;line-height:1.6}
 
+  .section-label{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+
   .err{
     background:#fff0f0;border:1px solid #fecaca;color:#991b1b;
     padding:14px 18px;border-radius:12px;
@@ -132,6 +134,9 @@
   </section>
 
   <section class="grid" id="stats"></section>
+
+  <p class="section-label" id="sites-label" style="display:none">By location</p>
+  <section class="grid" id="site-stats"></section>
 
   <div class="chartrow">
     <section class="chartcard">
@@ -188,7 +193,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script type="module">
 const $ = (id)=>document.getElementById(id);
-let BASELINE=null, TODAY=null;
+let BASELINE=null, TODAY=null, SITES_DATA=null;
 let intradayChart=null, weekChart=null, _nowHour=0, _accuracyLog=null;
 
 function fmt(n){return '$'+Math.round(n).toLocaleString()}
@@ -449,12 +454,25 @@ function render7DayChart(log){
   });
 }
 
+function renderSites(){
+  if(!SITES_DATA?.sites?.length) return;
+  $('sites-label').style.display='block';
+  $('site-stats').innerHTML=SITES_DATA.sites
+    .map(s=>`<div class="stat"><div class="k">${s.name}</div><div class="v">${fmt(s.revenueToday)}</div></div>`)
+    .join('');
+}
+
 async function load(){
   try{
     BASELINE=await (await fetch('/api/baseline')).json();
   }catch(e){ showErr('Could not load baseline data.'); return; }
+
+  // Fire today + sites in parallel
+  const todayFetch=fetch('/api/today');
+  const sitesFetch=fetch('/api/today-sites');
+
   try{
-    const r=await fetch('/api/today');
+    const r=await todayFetch;
     if(!r.ok){
       const j=await r.json().catch(()=>({}));
       if(j.code==='AUTH_INVALID'){ showAuthExpired(); }
@@ -467,8 +485,15 @@ async function load(){
     showErr('Live data unavailable: '+e.message+' — showing typical-day baseline.');
     TODAY={timezone:BASELINE_TZ(),asOfHour:guessHour(),revenueSoFar:typicalByNowFallback(),fetchedAt:null};
   }
+
+  try{
+    const sr=await sitesFetch;
+    if(sr.ok) SITES_DATA=await sr.json();
+  }catch(e){}
+
   updateDot();
   render();
+  renderSites();
 }
 
 function updateDot(){
