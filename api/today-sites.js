@@ -72,8 +72,14 @@ export default async function handler(req, res) {
       }),
     ]);
 
-    if (!sitesResp.ok) throw new Error(`sites list failed: ${sitesResp.status}`);
-    if (!statsResp.ok) throw new Error(`site stats failed: ${statsResp.status}`);
+    if (!sitesResp.ok) {
+      const body = await sitesResp.text().catch(() => "");
+      throw new Error(`sites list failed: ${sitesResp.status} — ${body.slice(0, 200)}`);
+    }
+    if (!statsResp.ok) {
+      const body = await statsResp.text().catch(() => "");
+      throw new Error(`site stats failed: ${statsResp.status} — ${body.slice(0, 200)}`);
+    }
 
     const sitesData = await sitesResp.json();
     const statsArray = await statsResp.json();
