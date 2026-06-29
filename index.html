@@ -82,6 +82,10 @@
   footer{color:var(--muted);font-size:12px;line-height:1.6}
 
   .section-label{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+  .site-card{cursor:pointer;transition:border-color .15s,background .15s}
+  .site-card:hover{border-color:#b0b8c4}
+  .site-card.selected{border-color:var(--blue-vivid);background:#f0fbff}
+  #site-detail{margin-bottom:32px}
 
   .err{
     background:#fff0f0;border:1px solid #fecaca;color:#991b1b;
@@ -168,6 +172,7 @@
 
   <p class="section-label" id="sites-label" style="display:none">By location</p>
   <section class="grid" id="site-stats"></section>
+  <div id="site-detail" style="display:none"></div>
 
   <section class="accuracycard" id="accuracy-section" style="display:none">
     <div class="accuracycard-header" id="acc-toggle">
@@ -194,7 +199,9 @@
 <script type="module">
 const $ = (id)=>document.getElementById(id);
 let BASELINE=null, TODAY=null, SITES_DATA=null;
-let intradayChart=null, weekChart=null, _nowHour=0, _accuracyLog=null;
+let intradayChart=null, weekChart=null, siteChart=null, _nowHour=0, _accuracyLog=null;
+let _selectedSiteId=null;
+const siteHistoryCache={};
 
 function fmt(n){return '$'+Math.round(n).toLocaleString()}
 function nowInTZ(tz){
@@ -458,8 +465,90 @@ function renderSites(){
   if(!SITES_DATA?.sites?.length) return;
   $('sites-label').style.display='block';
   $('site-stats').innerHTML=SITES_DATA.sites
-    .map(s=>`<div class="stat"><div class="k">${s.name}</div><div class="v">${fmt(s.revenueToday)}</div></div>`)
+    .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}" data-site-rev="${s.revenueToday}"><div class="k">${s.name}</div><div class="v">${fmt(s.revenueToday)}</div></div>`)
     .join('');
+  $('site-stats').addEventListener('click',e=>{
+    const card=e.target.closest('.site-card');
+    if(card) openSiteDetail(card.dataset.siteId, card.dataset.siteName, parseFloat(card.dataset.siteRev));
+  });
+}
+
+function movingAvg(arr, win=7){
+  return arr.map((_,i)=>{
+    const sl=arr.slice(Math.max(0,i-win+1),i+1);
+    return sl.reduce((s,v)=>s+v,0)/sl.length;
+  });
+}
+
+function renderSiteChart(daily){
+  const labels=daily.map(d=>{
+    const dt=new Date(d.date+'T12:00:00');
+    return new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(dt);
+  });
+  const revenues=daily.map(d=>d.revenue);
+  const avgs=movingAvg(revenues,7);
+  if(siteChart){siteChart.destroy();siteChart=null;}
+  const ctx=document.getElementById('site-chart');
+  if(!ctx) return;
+  siteChart=new Chart(ctx,{
+    data:{
+      labels,
+      datasets:[
+        {type:'bar',label:'Revenue',data:revenues,backgroundColor:'#b8c4cf',borderRadius:3,order:2},
+        {type:'line',label:'7-day avg',data:avgs,borderColor:'#29bde8',borderWidth:2,pointRadius:0,tension:0.4,fill:false,order:1},
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          callbacks:{
+            title:items=>items[0].label,
+            label:item=>item.datasetIndex===0
+              ?`Revenue: $${item.raw.toFixed(2)}`
+              :`7-day avg: $${item.raw.toFixed(2)}`,
+          }
+        }
+      },
+      scales:{
+        x:{grid:{display:false},ticks:{font:{family:'monospace',size:10},color:'#8591a2',maxRotation:0,autoSkip:true,maxTicksLimit:10}},
+        y:{grid:{color:'#e8ebf0'},ticks:{font:{family:'monospace',size:10},color:'#8591a2',callback:v=>'$'+(v>=1000?(v/1000).toFixed(1)+'k':Math.round(v))}},
+      }
+    }
+  });
+}
+
+async function openSiteDetail(siteId, siteName, revenueToday){
+  if(_selectedSiteId===siteId){
+    _selectedSiteId=null;
+    document.querySelectorAll('.site-card').forEach(c=>c.classList.remove('selected'));
+    const det=$('site-detail'); det.style.display='none';
+    if(siteChart){siteChart.destroy();siteChart=null;}
+    return;
+  }
+  _selectedSiteId=siteId;
+  document.querySelectorAll('.site-card').forEach(c=>c.classList.toggle('selected',c.dataset.siteId===String(siteId)));
+  const det=$('site-detail');
+  det.style.display='block';
+  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${fmt(revenueToday)}</span></div><p id="site-detail-sub">Loading…</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>Daily revenue</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span></div></div>`;
+  if(siteHistoryCache[siteId]){
+    $('site-detail-sub').textContent='Last 30 days — hover bars for totals.';
+    renderSiteChart(siteHistoryCache[siteId]);
+    return;
+  }
+  try{
+    const r=await fetch(`/api/site-history?siteId=${siteId}`);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data=await r.json();
+    siteHistoryCache[siteId]=data.daily;
+    if(_selectedSiteId!==siteId) return;
+    $('site-detail-sub').textContent='Last 30 days — hover bars for totals.';
+    renderSiteChart(data.daily);
+  }catch(e){
+    if(_selectedSiteId===siteId) $('site-detail-sub').textContent='Could not load history: '+e.message;
+  }
 }
 
 async function load(){
