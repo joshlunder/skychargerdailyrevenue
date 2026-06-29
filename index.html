@@ -229,7 +229,7 @@ function render(){
   if(dayPct>=0){pb.className='pace up';pb.textContent=`projected +${dayPct}% vs typical day`;}
   else{pb.className='pace down';pb.textContent=`projected ${dayPct}% vs typical day`;}
   const confPct=Math.round(c.confidence*100);
-  $('sub').textContent=`${confPct}% of the day complete · confidence builds as the afternoon progresses.`;
+  $('sub').textContent=`${confPct}% of the day complete.`;
   $('stats').innerHTML=[
     ['Revenue so far',fmt(c.soFar)],
     ['Typical by now',fmt(c.typicalByNow)],
