@@ -77,10 +77,12 @@ function utcOffsetString(tz, refDate) {
 }
 
 export default async function handler(req, res) {
+  console.log(`[log-accuracy] start ${new Date().toISOString()}`);
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
+    console.log("[log-accuracy] auth token obtained");
 
     // Log yesterday — it's fully complete by the time this runs (5am ET)
     const yesterdayDate = new Date(Date.now() - 86400000);
@@ -118,6 +120,7 @@ export default async function handler(req, res) {
     }
 
     const actual = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
+    console.log(`[log-accuracy] fetched ${hourRevenues.length} hours for ${dateStr}, actual=$${actual}`);
 
     // Load baseline (Blob first, then bundled fallback)
     let baseline;
@@ -148,21 +151,28 @@ export default async function handler(req, res) {
       snapshots[snapHour] = Number((soFar + (fullTypical - typicalByNow) * blendedPace).toFixed(2));
     }
 
-    // Load existing log from Blob
+    // Load existing log from Blob. If a blob exists but can't be read, abort instead
+    // of silently falling back to an empty log — that would overwrite 90 days of
+    // real history with a single entry.
     let log = [];
     try {
       const { blobs } = await list({ prefix: "accuracy-log.json" });
       if (blobs.length > 0) {
         const r = await fetch(blobs[0].url);
-        if (r.ok) log = await r.json();
+        if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+        log = await r.json();
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error(`[log-accuracy] ABORT: failed to read existing accuracy-log.json — ${e.message}`);
+      return res.status(500).json({ error: "failed to read existing accuracy-log.json, aborted to avoid data loss", code: "LOG_READ_FAILED" });
+    }
 
     // Append (deduplicate by date), keep 90 days
     log = log.filter(e => e.date !== dateStr);
     log.push({ date: dateStr, dow, actual, snapshots });
     log = log.slice(-90);
 
+    console.log(`[log-accuracy] writing accuracy-log.json (${log.length} entries)`);
     await put("accuracy-log.json", JSON.stringify(log), {
       access: "public",
       addRandomSuffix: false,
@@ -171,6 +181,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ logged: dateStr, dow, actual, snapshots });
   } catch (err) {
+    console.error(`[log-accuracy] ABORT: ${err.message || err}`);
     res.status(err.code === "AUTH_INVALID" ? 401 : 500).json({ error: String(err.message || err), code: err.code || "ERROR" });
   }
 }

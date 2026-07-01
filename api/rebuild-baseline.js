@@ -87,10 +87,12 @@ function utcOffsetString(tz, refDate) {
 }
 
 export default async function handler(req, res) {
+  console.log(`[rebuild-baseline] start ${new Date().toISOString()}`);
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
     const orgId = process.env.EE_ORG_ID || "77";
     const token = await getToken();
+    console.log("[rebuild-baseline] auth token obtained");
 
     const DAYS = ["all", "weekday", "weekend", "mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     const buckets = Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
@@ -137,6 +139,8 @@ export default async function handler(req, res) {
       });
     }
 
+    console.log(`[rebuild-baseline] fetched ${WINDOW_DAYS} days of hourly data`);
+
     const profile = {};
     for (const k of DAYS) {
       profile[k] = buckets[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
@@ -146,6 +150,7 @@ export default async function handler(req, res) {
       profile,
     };
 
+    console.log("[rebuild-baseline] writing baseline.json");
     const { url } = await put("baseline.json", JSON.stringify(out), {
       access: "public",
       addRandomSuffix: false,
@@ -156,6 +161,7 @@ export default async function handler(req, res) {
 
     res.status(200).json(out);
   } catch (err) {
+    console.error(`[rebuild-baseline] ABORT: ${err.message || err}`);
     res.status(err.code === "AUTH_INVALID" ? 401 : 500).json({ error: String(err.message || err), code: err.code || "ERROR" });
   }
 }
