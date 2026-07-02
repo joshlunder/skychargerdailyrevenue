@@ -57,6 +57,7 @@ function isHoliday(dateStr) {
   if (d === "07-04") return true; // Independence Day
   if (d === "12-24") return true; // Christmas Eve
   if (d === "12-25") return true; // Christmas
+  if (d === "12-31") return true; // New Year's Eve
   // Memorial Day — last Monday of May
   if (lastWeekday(year, 5, 1) === dateStr) return true;
   // Labor Day — 1st Monday of September

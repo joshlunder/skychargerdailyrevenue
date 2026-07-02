@@ -34,6 +34,7 @@ function isHoliday(dateStr) {
   if (d === "07-04") return true;
   if (d === "12-24") return true;
   if (d === "12-25") return true;
+  if (d === "12-31") return true;
   if (lastWeekday(year, 5, 1) === dateStr) return true;
   if (nthWeekday(year, 9, 1, 1) === dateStr) return true;
   if (nthWeekday(year, 11, 4, 4) === dateStr) return true;
