@@ -64,6 +64,16 @@ function isHoliday(dateStr) {
     addDaysToDateStr(thanksgiving, -1), thanksgiving,                                 // Wed before, Thanksgiving
     addDaysToDateStr(thanksgiving, 1), addDaysToDateStr(thanksgiving, 3),             // Black Friday, Sun after
   ]);
+
+  // July 4th is a fixed date but its weekday moves every year. When it lands on a
+  // Saturday, the federal "observed" holiday shifts to the following Monday — the
+  // same convention the US government uses for weekend holidays — and that Monday
+  // is a real return-travel day the plain +/-1-day window above doesn't reach.
+  // (Sunday landings don't need this: the existing "day after" already covers Monday.)
+  const july4 = `${year}-07-04`;
+  const july4Dow = new Date(july4 + "T00:00:00Z").getUTCDay(); // 0=Sun..6=Sat
+  if (july4Dow === 6) movingHolidayDates.add(addDaysToDateStr(july4, 2)); // Sat -> observed Monday
+
   if (movingHolidayDates.has(dateStr)) return true;
 
   return false;
