@@ -166,6 +166,7 @@
       <div class="legend">
         <span><i style="background:#c5e46a;border-radius:2px"></i>Above baseline</span>
         <span><i style="background:#f59e0b;border-radius:2px"></i>Below baseline</span>
+        <span><i style="background:#29bde8;border-radius:2px"></i>Holiday</span>
       </div>
     </section>
   </div>
@@ -395,7 +396,7 @@ function render7DayChart(log){
     return prof ? Number(prof.reduce((a,b) => a+b, 0).toFixed(2)) : 0;
   });
   const actuals = recent.map(e => e.actual);
-  const barColors = recent.map((e,i) => e.actual >= baselines[i] ? '#c5e46a' : '#f59e0b');
+  const barColors = recent.map((e,i) => e.holiday ? '#29bde8' : (e.actual >= baselines[i] ? '#c5e46a' : '#f59e0b'));
 
   if (weekChart) {
     weekChart.data.labels = labels;
@@ -642,7 +643,8 @@ function renderAccuracy(log){
   SNAP_LABELS.forEach(l=>html+=`<th>${l}</th>`);
   html+='</tr></thead><tbody>';
   recent.forEach(e=>{
-    html+=`<tr><td>${e.date.slice(5)}</td><td>${e.dow}</td><td>${fmt(e.actual)}</td>`;
+    const holidayMark=e.holiday?' <span title="Holiday — excluded from the baseline model, shown here for reference">＊</span>':'';
+    html+=`<tr><td>${e.date.slice(5)}${holidayMark}</td><td>${e.dow}</td><td>${fmt(e.actual)}</td>`;
     SNAP_HOURS.forEach(h=>{
       html+=e.snapshots[h]==null?'<td>—</td>':`<td>${errPill(e.snapshots[h],e.actual)}</td>`;
     });

@@ -92,10 +92,7 @@ export default async function handler(req, res) {
     const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(todayDate);
     const wdShort = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(yesterdayDate);
     const dow = DOW_MAP[wdShort];
-
-    if (isHoliday(dateStr)) {
-      return res.status(200).json({ skipped: dateStr, reason: "holiday" });
-    }
+    const holiday = isHoliday(dateStr);
 
     const offset = utcOffsetString(tz, yesterdayDate);
 
@@ -121,7 +118,7 @@ export default async function handler(req, res) {
     }
 
     const actual = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
-    console.log(`[log-accuracy] fetched ${hourRevenues.length} hours for ${dateStr}, actual=$${actual}`);
+    console.log(`[log-accuracy] fetched ${hourRevenues.length} hours for ${dateStr}, actual=$${actual}${holiday ? " (holiday)" : ""}`);
 
     // Load baseline (Blob first, then bundled fallback)
     let baseline;
@@ -168,9 +165,12 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "failed to read existing accuracy-log.json, aborted to avoid data loss", code: "LOG_READ_FAILED" });
     }
 
-    // Append (deduplicate by date), keep 90 days
+    // Append (deduplicate by date), keep 90 days. Holidays are still logged (so
+    // actual revenue is visible in history/charts) but flagged — they're excluded
+    // from the baseline calculation (rebuild-baseline.js) since they'd skew what
+    // "typical" looks like, but that doesn't mean the day itself should be invisible.
     log = log.filter(e => e.date !== dateStr);
-    log.push({ date: dateStr, dow, actual, snapshots });
+    log.push({ date: dateStr, dow, actual, snapshots, ...(holiday ? { holiday: true } : {}) });
     log = log.slice(-90);
 
     console.log(`[log-accuracy] writing accuracy-log.json (${log.length} entries)`);
@@ -180,7 +180,7 @@ export default async function handler(req, res) {
       contentType: "application/json",
     });
 
-    res.status(200).json({ logged: dateStr, dow, actual, snapshots });
+    res.status(200).json({ logged: dateStr, dow, actual, snapshots, holiday });
   } catch (err) {
     console.error(`[log-accuracy] ABORT: ${err.message || err}`);
     res.status(err.code === "AUTH_INVALID" ? 401 : 500).json({ error: String(err.message || err), code: err.code || "ERROR" });
