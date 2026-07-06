@@ -28,21 +28,44 @@ function lastWeekday(year, month, weekday) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(d);
 }
 
+// Offsets a "YYYY-MM-DD" string by N days (positive or negative) using real date
+// arithmetic, so month/year rollovers (e.g. Dec 31 + 1 day → Jan 1) are always correct.
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(d);
+}
+
 function isHoliday(dateStr) {
-  const [year, month, day] = dateStr.split("-").map(Number);
-  const d = `${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-  if (d === "07-04") return true;
-  if (d === "12-24") return true;
-  if (d === "12-25") return true;
-  if (d === "12-31") return true;
-  if (lastWeekday(year, 5, 1) === dateStr) return true;
-  if (nthWeekday(year, 9, 1, 1) === dateStr) return true;
-  if (nthWeekday(year, 11, 4, 4) === dateStr) return true;
-  const thanksgiving = nthWeekday(year, 11, 4, 4);
-  const blackFriday = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(
-    new Date(new Date(thanksgiving + "T00:00:00Z").getTime() + 86400000)
-  );
-  if (blackFriday === dateStr) return true;
+  const [year] = dateStr.split("-").map(Number);
+  const d = dateStr.slice(5); // "MM-DD"
+
+  // Fixed-date holidays plus their adjacent travel days. Year-agnostic month-day
+  // checks — always correct, no year arithmetic needed.
+  const fixedDates = new Set([
+    "07-03", "07-04", "07-05", // day before/after Independence Day
+    "12-23", "12-24",          // day before Christmas Eve, Christmas Eve
+    "12-25", "12-26", "12-27", "12-28", "12-29", "12-30", // Christmas + 6-day block to NYE
+    "12-31",                   // New Year's Eve
+    "01-01",                   // New Year's Day
+  ]);
+  if (fixedDates.has(d)) return true;
+
+  // Moving holidays are defined by day-of-week-of-month, so their weekday never
+  // changes year to year — adjacent-day offsets are fixed day-counts from the
+  // holiday's own (already year-correct) date, same technique as Black Friday below.
+  const memorialDay = lastWeekday(year, 5, 1); // last Monday of May
+  const laborDay = nthWeekday(year, 9, 1, 1);  // 1st Monday of September
+  const thanksgiving = nthWeekday(year, 11, 4, 4); // 4th Thursday of November
+
+  const movingHolidayDates = new Set([
+    addDaysToDateStr(memorialDay, -3), memorialDay, addDaysToDateStr(memorialDay, 1), // Fri before, Memorial Day, Tue after
+    addDaysToDateStr(laborDay, -3), laborDay, addDaysToDateStr(laborDay, 1),           // Fri before, Labor Day, Tue after
+    addDaysToDateStr(thanksgiving, -1), thanksgiving,                                 // Wed before, Thanksgiving
+    addDaysToDateStr(thanksgiving, 1), addDaysToDateStr(thanksgiving, 3),             // Black Friday, Sun after
+  ]);
+  if (movingHolidayDates.has(dateStr)) return true;
+
   return false;
 }
 
