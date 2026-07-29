@@ -49,13 +49,19 @@ function dateAtNDaysAgo(n, tz) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(d);
 }
 
-async function revenueForDay(token, siteId, dateStr, nextDateStr, offset) {
+// Returns both units from a single call, so siteHistoryCache serves both display
+// modes and switching units needs no refetch.
+async function statsForDay(token, siteId, dateStr, nextDateStr, offset) {
   const from = encodeURIComponent(`${dateStr}T00:00:00${offset}`);
   const to = encodeURIComponent(`${nextDateStr}T00:00:00${offset}`);
   const url = `${API_BASE}/api/v1/organization/stats?siteIds=${siteId}&from=${from}&to=${to}`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (!r.ok) return 0;
-  return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+  if (!r.ok) return { revenue: 0, energyKwh: 0 };
+  const agg = (await r.json()).aggregateStats;
+  return {
+    revenue: (agg?.totalRevenue || 0) / 100,
+    energyKwh: agg?.totalEnergy || 0, // already kWh
+  };
 }
 
 export default async function handler(req, res) {
@@ -77,13 +83,14 @@ export default async function handler(req, res) {
       });
     }
 
-    const revenues = await Promise.all(
-      pairs.map(({ date, next }) => revenueForDay(token, siteId, date, next, offset))
+    const perDay = await Promise.all(
+      pairs.map(({ date, next }) => statsForDay(token, siteId, date, next, offset))
     );
 
     const daily = pairs.map(({ date }, i) => ({
       date,
-      revenue: Number(revenues[i].toFixed(2)),
+      revenue: Number(perDay[i].revenue.toFixed(2)),
+      energyKwh: Number(perDay[i].energyKwh.toFixed(1)),
     }));
 
     res.setHeader("cache-control", "s-maxage=3600");

@@ -54,12 +54,18 @@ function currentLocalHour(tz) {
   return parseInt(h, 10) % 24;
 }
 
-async function revenueForSite(token, siteId, fromISO, toISO) {
+// Returns both units from a single call — totalEnergy rides along in the same
+// response as totalRevenue, so kWh costs zero additional API calls.
+async function statsForSite(token, siteId, fromISO, toISO) {
   const url = `${API_BASE}/api/v1/organization/stats?siteIds=${siteId}` +
     `&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (!r.ok) return 0;
-  return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+  if (!r.ok) return { revenue: 0, energyKwh: 0 };
+  const agg = (await r.json()).aggregateStats;
+  return {
+    revenue: (agg?.totalRevenue || 0) / 100,
+    energyKwh: agg?.totalEnergy || 0, // already kWh
+  };
 }
 
 export default async function handler(req, res) {
@@ -96,15 +102,16 @@ export default async function handler(req, res) {
     const activeSites = sitesList.filter(s => s.active !== false);
 
     // Fetch revenue per site in parallel (all at once — typically <15 sites)
-    const revenues = await Promise.all(
-      activeSites.map(s => revenueForSite(token, s.id, from, to))
+    const perSite = await Promise.all(
+      activeSites.map(s => statsForSite(token, s.id, from, to))
     );
 
     const sites = activeSites
       .map((s, i) => ({
         id: s.id,
         name: s.name,
-        revenueToday: Number(revenues[i].toFixed(2)),
+        revenueToday: Number(perSite[i].revenue.toFixed(2)),
+        energyToday: Number(perSite[i].energyKwh.toFixed(1)),
       }))
       .sort((a, b) => b.revenueToday - a.revenueToday);
 

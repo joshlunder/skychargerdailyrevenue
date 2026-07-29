@@ -69,13 +69,19 @@ export default async function handler(req, res) {
       throw e;
     }
     const data = await r.json();
-    const revenueSoFar = (data.aggregateStats?.totalRevenue || 0) / 100;
+    const agg = data.aggregateStats;
+    const revenueSoFar = (agg?.totalRevenue || 0) / 100;
+    // totalEnergy is already in kWh (no divisor) — verified 2026-07-28 against
+    // 2026-07-27: totalEnergy 3162.64 vs averageEnergyKwh 40.5467 x 78 sessions
+    // = 3162.64 exactly, implied rate $0.507/kWh.
+    const energySoFar = agg?.totalEnergy || 0;
 
     res.setHeader("cache-control", "s-maxage=300");
     res.status(200).json({
       asOfHour: currentLocalHour(tz),
       timezone: tz,
       revenueSoFar: Number(revenueSoFar.toFixed(2)),
+      energySoFar: Number(energySoFar.toFixed(1)),
       fetchedAt: new Date().toISOString(),
     });
   } catch (err) {

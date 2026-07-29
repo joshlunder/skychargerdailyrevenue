@@ -130,7 +130,8 @@ export default async function handler(req, res) {
     const offset = utcOffsetString(tz, yesterdayDate);
 
     // Fetch all 24 hours of yesterday in batches of 5 to avoid rate-limiting.
-    const hourRevenues = [];
+    // Each call yields both units; totalEnergy is already in kWh (no divisor).
+    const hourStats = [];
     for (let i = 0; i < 24; i += 5) {
       const batch = Array.from({ length: Math.min(5, 24 - i) }, (_, j) => i + j);
       const results = await Promise.all(batch.map(async h => {
@@ -142,16 +143,23 @@ export default async function handler(req, res) {
           `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
         for (let attempt = 0; attempt < 2; attempt++) {
           const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-          if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+          if (r.ok) {
+            const agg = (await r.json()).aggregateStats;
+            return { revenue: (agg?.totalRevenue || 0) / 100, energyKwh: agg?.totalEnergy || 0 };
+          }
           if (attempt === 0) await new Promise(res => setTimeout(res, 300));
         }
-        return 0;
+        return { revenue: 0, energyKwh: 0 };
       }));
-      hourRevenues.push(...results);
+      hourStats.push(...results);
     }
+    // The projection replay below stays revenue-only by design, so `snapshots`
+    // needs no mode awareness and this file keeps exactly one copy of the model.
+    const hourRevenues = hourStats.map(s => s.revenue);
 
     const actual = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
-    console.log(`[log-accuracy] fetched ${hourRevenues.length} hours for ${dateStr}, actual=$${actual}${holiday ? " (holiday)" : ""}`);
+    const actualKwh = Number(hourStats.reduce((a, s) => a + s.energyKwh, 0).toFixed(1));
+    console.log(`[log-accuracy] fetched ${hourStats.length} hours for ${dateStr}, actual=$${actual}, ${actualKwh}kWh${holiday ? " (holiday)" : ""}`);
 
     // Load baseline (Blob first, then bundled fallback)
     let baseline;
@@ -203,7 +211,7 @@ export default async function handler(req, res) {
     // from the baseline calculation (rebuild-baseline.js) since they'd skew what
     // "typical" looks like, but that doesn't mean the day itself should be invisible.
     log = log.filter(e => e.date !== dateStr);
-    log.push({ date: dateStr, dow, actual, snapshots, ...(holiday ? { holiday: true } : {}) });
+    log.push({ date: dateStr, dow, actual, actualKwh, snapshots, ...(holiday ? { holiday: true } : {}) });
     log = log.slice(-90);
 
     console.log(`[log-accuracy] writing accuracy-log.json (${log.length} entries)`);
@@ -213,7 +221,7 @@ export default async function handler(req, res) {
       contentType: "application/json",
     });
 
-    res.status(200).json({ logged: dateStr, dow, actual, snapshots, holiday });
+    res.status(200).json({ logged: dateStr, dow, actual, actualKwh, snapshots, holiday });
   } catch (err) {
     console.error(`[log-accuracy] ABORT: ${err.message || err}`);
     res.status(err.code === "AUTH_INVALID" ? 401 : 500).json({ error: String(err.message || err), code: err.code || "ERROR" });

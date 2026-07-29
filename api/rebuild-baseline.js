@@ -125,6 +125,8 @@ export default async function handler(req, res) {
 
     const DAYS = ["all", "weekday", "weekend", "mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     const buckets = Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
+    const bucketsKwh = Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
+    // Weight counts are shared — same days, same holiday exclusions, both units.
     const wdays = Object.fromEntries(DAYS.map(k => [k, 0]));
 
     for (let d = 1; d <= WINDOW_DAYS; d++) {
@@ -142,7 +144,7 @@ export default async function handler(req, res) {
       const nextDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(nextDate);
       const offset = utcOffsetString(tz, refDate);
       const hours = Array.from({ length: 24 }, (_, h) => h);
-      const hourRevenues = [];
+      const hourStats = [];
       for (let i = 0; i < hours.length; i += 5) {
         const batch = hours.slice(i, i + 5);
         const results = await Promise.all(batch.map(async h => {
@@ -154,32 +156,59 @@ export default async function handler(req, res) {
             `&from=${encodeURIComponent(start)}&to=${encodeURIComponent(end)}`;
           for (let attempt = 0; attempt < 2; attempt++) {
             const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-            if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+            if (r.ok) {
+              const agg = (await r.json()).aggregateStats;
+              return {
+                revenue: (agg?.totalRevenue || 0) / 100,
+                energyKwh: agg?.totalEnergy || 0, // already kWh
+              };
+            }
             if (attempt === 0) await new Promise(res => setTimeout(res, 300));
           }
-          return 0;
+          return { revenue: 0, energyKwh: 0 };
         }));
-        hourRevenues.push(...results);
+        hourStats.push(...results);
       }
-      hourRevenues.forEach((dollars, h) => {
-        buckets.all[h] += dollars * weight;
-        buckets[wk][h] += dollars * weight;
-        buckets[dow][h] += dollars * weight;
+      hourStats.forEach(({ revenue, energyKwh }, h) => {
+        buckets.all[h] += revenue * weight;
+        buckets[wk][h] += revenue * weight;
+        buckets[dow][h] += revenue * weight;
+        bucketsKwh.all[h] += energyKwh * weight;
+        bucketsKwh[wk][h] += energyKwh * weight;
+        bucketsKwh[dow][h] += energyKwh * weight;
       });
     }
 
     console.log(`[rebuild-baseline] fetched ${WINDOW_DAYS} days of hourly data`);
 
     const profile = {};
+    const profileEnergy = {};
     for (const k of DAYS) {
       profile[k] = buckets[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
+      profileEnergy[k] = bucketsKwh[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
     }
     const out = {
       meta: { source: `rolling ${WINDOW_DAYS} days (recency-weighted: last ${RECENT_DAYS}d at ${RECENT_WEIGHT}x, holidays excluded)`, generated: new Date().toISOString(), days: WINDOW_DAYS },
       profile,
+      profileEnergy,
     };
 
-    console.log("[rebuild-baseline] writing baseline.json");
+    // Sanity gate before a destructive overwrite. This endpoint writes with
+    // addRandomSuffix:false and Blob keeps no version history, so a run that
+    // silently returned mostly zeros (EE outage, auth edge case) would replace a
+    // good baseline with a bad one and skew the dashboard's headline number until
+    // the next Monday. Refuse to write anything that fails a floor check.
+    const revSum = profile.all.reduce((a, b) => a + b, 0);
+    const kwhSum = profileEnergy.all.reduce((a, b) => a + b, 0);
+    const allFinite = [...Object.values(profile), ...Object.values(profileEnergy)]
+      .every(arr => arr.length === 24 && arr.every(Number.isFinite));
+    if (!allFinite || revSum < 500 || kwhSum < 1000) {
+      const msg = `refusing to write implausible baseline: revenue/day=$${revSum.toFixed(2)}, energy/day=${kwhSum.toFixed(1)}kWh, allFinite=${allFinite}`;
+      console.error(`[rebuild-baseline] ABORT: ${msg}`);
+      return res.status(500).json({ error: msg, code: "IMPLAUSIBLE_BASELINE", profile, profileEnergy });
+    }
+
+    console.log(`[rebuild-baseline] guard passed (revenue/day=$${revSum.toFixed(2)}, energy/day=${kwhSum.toFixed(1)}kWh); writing baseline.json`);
     const { url } = await put("baseline.json", JSON.stringify(out), {
       access: "public",
       addRandomSuffix: false,

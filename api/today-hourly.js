@@ -52,15 +52,23 @@ function localHourISO(tz, dateStr, hour) {
   return `${dateStr}T${String(hour).padStart(2, "0")}:00:00${offset}`;
 }
 
-async function revenueForWindow(token, orgId, fromISO, toISO) {
+// Returns both units from a single call. Hourly windows are exactly additive in
+// both units (verified 2026-07-28: sum of 24 hours == full-day total, 0% delta).
+async function statsForWindow(token, orgId, fromISO, toISO) {
   const url = `${API_BASE}/api/v1/organization/stats?organizationId=${orgId}` +
     `&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`;
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (r.ok) return ((await r.json()).aggregateStats?.totalRevenue || 0) / 100;
+    if (r.ok) {
+      const agg = (await r.json()).aggregateStats;
+      return {
+        revenue: (agg?.totalRevenue || 0) / 100,
+        energyKwh: agg?.totalEnergy || 0, // already kWh
+      };
+    }
     if (attempt === 0) await new Promise(res => setTimeout(res, 300));
   }
-  return 0;
+  return { revenue: 0, energyKwh: 0 };
 }
 
 async function batchedMap(items, batchSize, fn) {
@@ -83,14 +91,23 @@ export default async function handler(req, res) {
     const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
 
     const hours = Array.from({ length: nowHour + 1 }, (_, h) => h);
-    const revenues = await batchedMap(hours, 5, h =>
-      revenueForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
+    const perHour = await batchedMap(hours, 5, h =>
+      statsForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
     );
 
-    let running = 0;
-    const hourly = revenues.map((rev, h) => {
-      running += rev;
-      return { hour: h, revenue: Number(rev.toFixed(2)), cumulative: Number(running.toFixed(2)) };
+    // Both cumulatives are precomputed server-side so the frontend chart only has
+    // to pick a field name rather than re-accumulate per mode.
+    let running = 0, runningKwh = 0;
+    const hourly = perHour.map(({ revenue, energyKwh }, h) => {
+      running += revenue;
+      runningKwh += energyKwh;
+      return {
+        hour: h,
+        revenue: Number(revenue.toFixed(2)),
+        cumulative: Number(running.toFixed(2)),
+        energyKwh: Number(energyKwh.toFixed(1)),
+        cumulativeKwh: Number(runningKwh.toFixed(1)),
+      };
     });
 
     res.setHeader("cache-control", "s-maxage=300");
