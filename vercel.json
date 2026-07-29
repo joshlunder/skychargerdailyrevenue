@@ -1,12 +1,27 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/today.js": { "maxDuration": 30 },
-    "api/rebuild-baseline.js": { "maxDuration": 300 },
-    "api/log-accuracy.js": { "maxDuration": 60 }
+    "api/today.js": {
+      "maxDuration": 30
+    },
+    "api/rebuild-baseline.js": {
+      "maxDuration": 300
+    },
+    "api/log-accuracy.js": {
+      "maxDuration": 60
+    },
+    "api/backfill-energy.js": {
+      "maxDuration": 60
+    }
   },
   "crons": [
-    { "path": "/api/rebuild-baseline", "schedule": "0 9 * * 1" },
-    { "path": "/api/log-accuracy", "schedule": "0 9 * * *" }
+    {
+      "path": "/api/rebuild-baseline",
+      "schedule": "0 9 * * 1"
+    },
+    {
+      "path": "/api/log-accuracy",
+      "schedule": "0 9 * * *"
+    }
   ]
 }
