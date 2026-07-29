@@ -46,6 +46,19 @@
     font-family:'Spline Sans Mono',monospace;font-size:12px;letter-spacing:.2em;
     text-transform:uppercase;color:var(--muted);margin-bottom:14px
   }
+  /* Row owns the label's bottom margin so vertical rhythm is unchanged. */
+  .hero-label-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .hero-label-row .label{margin-bottom:0}
+  .unit-toggle{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex-shrink:0}
+  .unit-toggle button{
+    font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
+    color:var(--muted);background:transparent;border:0;padding:5px 13px;cursor:pointer;
+    transition:background .15s,color .15s
+  }
+  .unit-toggle button+button{border-left:1px solid var(--line)}
+  .unit-toggle button:hover:not(.active):not(:disabled){color:var(--ink);background:var(--panel)}
+  .unit-toggle button.active{background:var(--blue-vivid);color:#fff}
+  .unit-toggle button:disabled{opacity:.4;cursor:not-allowed}
   .projection{
     font-family:'Outfit',sans-serif;font-weight:600;
     font-size:clamp(44px,8vw,80px);line-height:.9;letter-spacing:-.03em;color:var(--ink)
@@ -131,7 +144,13 @@
   <div class="err" id="err"></div>
 
   <section class="hero">
-    <div class="label">Projected revenue · end of today</div>
+    <div class="hero-label-row">
+      <div class="label" id="hero-label">Projected revenue · end of today</div>
+      <div class="unit-toggle" id="unit-toggle" role="group" aria-label="Display unit">
+        <button type="button" data-unit="rev" class="active" aria-pressed="true">$</button>
+        <button type="button" data-unit="kwh" aria-pressed="false">kWh</button>
+      </div>
+    </div>
     <div class="projection" id="projection"><span class="loading">loading…</span></div>
     <div class="pace" id="pace" style="display:none"></div>
     <div class="sub" id="sub"></div>
@@ -142,7 +161,7 @@
   <div class="chartrow">
     <section class="chartcard">
       <h2 id="chart-title">Today vs a typical day</h2>
-      <p>Cumulative revenue through the day vs baseline.</p>
+      <p id="chart-sub">Cumulative revenue through the day vs baseline.</p>
       <div style="position:relative;height:260px"><canvas id="chart"></canvas></div>
       <div class="legend">
         <span><i style="background:#29bde8"></i>Today</span>
@@ -158,7 +177,7 @@
           <option value="30">Last 30 days</option>
         </select>
       </div>
-      <p>Daily revenue vs expected baseline.</p>
+      <p id="week-chart-sub">Daily revenue vs expected baseline.</p>
       <div style="position:relative;height:260px">
         <canvas id="week-chart"></canvas>
         <div id="week-chart-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8591a2;font-family:'Spline Sans Mono',monospace;font-size:12px;text-align:center;padding:20px;line-height:1.6">Data available after the first nightly log runs at 5am ET</div>
@@ -204,7 +223,42 @@ let intradayChart=null, weekChart=null, siteChart=null, _nowHour=0, _accuracyLog
 let _selectedSiteId=null;
 const siteHistoryCache={};
 
-function fmt(n){return '$'+Math.round(n).toLocaleString()}
+// Display unit. Every field name that differs between dollars and kilowatt-hours
+// lives in one table, so render functions pick a field rather than branching.
+let MODE='rev';          // 'rev' | 'kwh'
+let KWH_OK=false;        // set once BASELINE loads; false disables the kWh toggle
+const UNIT={
+  rev:{
+    prof:'profile', soFar:'revenueSoFar', hourlyCum:'cumulative',
+    siteField:'revenueToday', dailyField:'revenue', actualField:'actual',
+    heroLabel:'Projected revenue · end of today',
+    soFarLabel:'Revenue so far',
+    chartSub:'Cumulative revenue through the day vs baseline.',
+    weekSub:'Daily revenue vs expected baseline.',
+    siteLegend:'Daily revenue',
+    fmt:n=>'$'+Math.round(n).toLocaleString(),
+    precise:n=>'$'+n.toFixed(2),
+    tick:v=>'$'+(v>=1000?(v/1000).toFixed(1).replace(/\.0$/,'')+'k':Math.round(v)),
+  },
+  kwh:{
+    prof:'profileEnergy', soFar:'energySoFar', hourlyCum:'cumulativeKwh',
+    siteField:'energyToday', dailyField:'energyKwh', actualField:'actualKwh',
+    heroLabel:'Projected energy · end of today',
+    soFarLabel:'Energy so far',
+    chartSub:'Cumulative energy (kWh) through the day vs baseline.',
+    weekSub:'Daily energy (kWh) vs expected baseline.',
+    siteLegend:'Daily energy',
+    fmt:n=>Math.round(n).toLocaleString()+' kWh',
+    precise:n=>n.toFixed(1)+' kWh',
+    tick:v=>(v>=1000?(v/1000).toFixed(1).replace(/\.0$/,'')+'k':Math.round(v)),
+  },
+};
+const U=()=>UNIT[MODE];
+
+function fmt(n){return U().fmt(n)}
+// The projection-accuracy table stays revenue-only by design, so it must not
+// follow MODE — it keeps its own formatter.
+function fmtRev(n){return '$'+Math.round(n).toLocaleString()}
 function nowInTZ(tz){
   try{return new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'2-digit',minute:'2-digit',weekday:'short',hour12:true}).format(new Date())}
   catch(e){return new Date().toLocaleTimeString()}
@@ -212,9 +266,13 @@ function nowInTZ(tz){
 function currentDOW(tz){
   return new Intl.DateTimeFormat('en-US',{timeZone:tz,weekday:'short'}).format(new Date()).toLowerCase();
 }
-function pickProfile(tz){
+function pickProfile(tz, mode=MODE){
   const dow=currentDOW(tz);
-  return BASELINE.profile[dow]||BASELINE.profile.all;
+  // Fall back to the revenue profile if an energy profile is missing — unreachable
+  // while KWH_OK gates the toggle, but prevents a half-written blob from blanking
+  // the whole dashboard with a TypeError.
+  const p=BASELINE[UNIT[mode].prof]||BASELINE.profile;
+  return p[dow]||p.all;
 }
 
 function compute(){
@@ -225,26 +283,41 @@ function compute(){
   const fullTypical=cum[23];
   const nowHour=TODAY.asOfHour;
   const typicalByNow=cum[nowHour];
-  const soFar=TODAY.revenueSoFar;
+  const soFar=TODAY[U().soFar] ?? 0;
   const pace = typicalByNow>0 ? soFar/typicalByNow : 1;
   const confidence = typicalByNow/fullTypical;
   const blendedPace = confidence*pace + (1-confidence)*1.0;
   const projected = soFar + (fullTypical - typicalByNow)*blendedPace;
-  return {tz,prof,cum,fullTypical,nowHour,typicalByNow,soFar,pace,confidence,blendedPace,projected};
+  // "% of the day complete" is a wall-clock notion, so it's always derived from
+  // the revenue profile. Otherwise the same instant would report two different
+  // percentages in the two modes (energy and revenue day-shapes differ because
+  // $/kWh varies by site), which reads as a bug.
+  const revProf=pickProfile(tz,'rev');
+  let rs=0, rTotal=0, rByNow=0;
+  for(let h=0;h<24;h++){rs+=revProf[h]; if(h===nowHour)rByNow=rs;}
+  rTotal=rs;
+  const confidenceDisplay = rTotal>0 ? rByNow/rTotal : confidence;
+  return {tz,prof,cum,fullTypical,nowHour,typicalByNow,soFar,pace,confidence,confidenceDisplay,blendedPace,projected};
 }
 
 function render(){
   const c=compute(); if(!c)return;
-  $('projection').innerHTML = '$'+Math.floor(c.projected).toLocaleString();
+  const u=U();
+  $('projection').innerHTML = MODE==='kwh'
+    ? Math.floor(c.projected).toLocaleString()+' <span style="font-size:.45em;letter-spacing:0">kWh</span>'
+    : '$'+Math.floor(c.projected).toLocaleString();
+  $('hero-label').textContent = u.heroLabel;
+  $('chart-sub').textContent = u.chartSub;
+  $('week-chart-sub').textContent = u.weekSub;
   // Compare projected end-of-day total against a typical full day — the bottom-line signal.
   const dayPct = c.fullTypical>0 ? Math.round((c.projected/c.fullTypical-1)*100) : 0;
   const pb=$('pace'); pb.style.display='inline-block';
   if(dayPct>=0){pb.className='pace up';pb.textContent=`projected +${dayPct}% vs typical day`;}
   else{pb.className='pace down';pb.textContent=`projected ${dayPct}% vs typical day`;}
-  const confPct=Math.round(c.confidence*100);
+  const confPct=Math.round(c.confidenceDisplay*100);
   $('sub').textContent=`${confPct}% of the day complete.`;
   $('stats').innerHTML=[
-    ['Revenue so far',fmt(c.soFar)],
+    [u.soFarLabel,fmt(c.soFar)],
     ['Typical by now',fmt(c.typicalByNow)],
     ['Typical full day',fmt(c.fullTypical)],
   ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
@@ -254,6 +327,37 @@ function render(){
   $('chart-title').textContent = `Today vs a typical ${typLabel}`;
   $('chart-legend-typical').textContent = `Typical ${typLabel}`;
   $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Accuracy improves as the day progresses.`;
+}
+
+// Reflects MODE onto the toggle, and disables kWh when no energy baseline exists
+// (e.g. the weekly rebuild hasn't run yet, or it failed).
+function syncModeControl(){
+  const wrap=$('unit-toggle'); if(!wrap)return;
+  wrap.querySelectorAll('button').forEach(b=>{
+    const on=b.dataset.unit===MODE;
+    b.classList.toggle('active',on);
+    b.setAttribute('aria-pressed',String(on));
+    if(b.dataset.unit==='kwh'){
+      b.disabled=!KWH_OK;
+      b.title=KWH_OK?'Show kilowatt-hours':'kWh baseline not built yet — rebuilds Mondays';
+    }
+  });
+}
+
+function setMode(m){
+  if(m!=='rev'&&m!=='kwh')return;
+  if(m==='kwh'&&!KWH_OK)return;
+  if(m===MODE)return;
+  MODE=m;
+  try{localStorage.setItem('sc.unitMode',m)}catch(e){}
+  syncModeControl();
+  // Everything needed is already in memory — no refetch on toggle.
+  render();
+  renderSites();
+  if(_selectedSiteId&&siteHistoryCache[_selectedSiteId]){
+    const card=document.querySelector(`.site-card[data-site-id="${_selectedSiteId}"]`);
+    if(card) paintSiteDetail(_selectedSiteId, card.dataset.siteName, siteHistoryCache[_selectedSiteId]);
+  }
 }
 
 function labelHour(h){const ap=h<12?'AM':'PM';const x=h%12===0?12:h%12;return `${x}${ap}`}
@@ -289,7 +393,7 @@ function drawChart(c, typLabel){
   const todayData = Array.from({length:24}, (_,h) => {
     if (h <= c.nowHour) {
       const entry = TODAY?.hourly?.[h];
-      return entry != null ? entry.cumulative : c.cum[h] * c.pace;
+      return entry != null ? (entry[U().hourlyCum] ?? entry.cumulative) : c.cum[h] * c.pace;
     }
     return c.soFar + (c.cum[h] - c.typicalByNow) * c.blendedPace;
   });
@@ -346,7 +450,7 @@ function drawChart(c, typLabel){
         tooltip: {
           itemSort: (a, b) => a.dataset.label === 'Today' ? -1 : 1,
           callbacks: {
-            label: item => `${item.dataset.label}: $${Math.round(item.parsed.y).toLocaleString()}`
+            label: item => `${item.dataset.label}: ${U().fmt(item.parsed.y)}`
           }
         }
       },
@@ -366,7 +470,7 @@ function drawChart(c, typLabel){
           ticks: {
             color:'#8591a2',
             font:{size:10},
-            callback: v => '$'+(v>=1000 ? (v/1000).toFixed(1).replace(/\.0$/,'')+'k' : Math.round(v))
+            callback: v => U().tick(v)
           }
         }
       }
@@ -391,12 +495,15 @@ function render7DayChart(log){
     const day = e.dow.slice(0,1).toUpperCase()+e.dow.slice(1);
     return [day, e.date.slice(5)];
   });
+  const profSet = BASELINE[U().prof] || BASELINE.profile;
   const baselines = recent.map(e => {
-    const prof = BASELINE.profile[e.dow];
+    const prof = profSet[e.dow];
     return prof ? Number(prof.reduce((a,b) => a+b, 0).toFixed(2)) : 0;
   });
-  const actuals = recent.map(e => e.actual);
-  const barColors = recent.map((e,i) => e.holiday ? '#29bde8' : (e.actual >= baselines[i] ? '#c5e46a' : '#f59e0b'));
+  // Days logged before kWh tracking existed have no actualKwh — null leaves a gap
+  // in the bar series rather than drawing a misleading zero.
+  const actuals = recent.map(e => e[U().actualField] ?? null);
+  const barColors = recent.map((e,i) => e.holiday ? '#29bde8' : ((actuals[i] ?? 0) >= baselines[i] ? '#c5e46a' : '#f59e0b'));
 
   if (weekChart) {
     weekChart.data.labels = labels;
@@ -443,7 +550,7 @@ function render7DayChart(log){
         tooltip: {
           itemSort: (a, b) => a.dataset.label === 'Actual' ? -1 : 1,
           callbacks: {
-            label: item => `${item.dataset.label}: $${Math.round(item.parsed.y).toLocaleString()}`
+            label: item => `${item.dataset.label}: ${U().fmt(item.parsed.y)}`
           }
         }
       },
@@ -457,7 +564,7 @@ function render7DayChart(log){
           ticks: {
             color:'#8591a2',
             font:{size:10},
-            callback: v => '$'+(v>=1000 ? (v/1000).toFixed(1).replace(/\.0$/,'')+'k' : Math.round(v))
+            callback: v => U().tick(v)
           }
         }
       }
@@ -469,7 +576,7 @@ function renderSites(){
   if(!SITES_DATA?.sites?.length) return;
   $('sites-label').style.display='block';
   $('site-stats').innerHTML=SITES_DATA.sites
-    .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}" data-site-rev="${s.revenueToday}"><div class="k">${s.name}</div><div class="v">${fmt(s.revenueToday)}</div></div>`)
+    .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}"><div class="k">${s.name}</div><div class="v">${fmt(s[U().siteField] ?? 0)}</div></div>`)
     .join('');
 }
 
@@ -487,8 +594,8 @@ function renderSiteChart(daily){
     const date=new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric'}).format(dt);
     return [day,date];
   });
-  const revenues=daily.map(d=>d.revenue);
-  const avgs=movingAvg(revenues,7);
+  const values=daily.map(d=>d[U().dailyField] ?? 0);
+  const avgs=movingAvg(values,7);
   if(siteChart){siteChart.destroy();siteChart=null;}
   const ctx=document.getElementById('site-chart');
   if(!ctx) return;
@@ -496,60 +603,68 @@ function renderSiteChart(daily){
     data:{
       labels,
       datasets:[
-        {type:'bar',label:'Revenue',data:revenues,backgroundColor:'#b8c4cf',borderRadius:3,order:2},
+        {type:'bar',label:'Daily',data:values,backgroundColor:'#b8c4cf',borderRadius:3,order:2},
         {type:'line',label:'7-day avg',data:avgs,borderColor:'#29bde8',borderWidth:2,pointRadius:0,tension:0.4,fill:false,order:1},
       ]
     },
     options:{
-      responsive:true,maintainAspectRatio:false,
+      responsive:true,maintainAspectRatio:false,animation:false,
       interaction:{mode:'index',intersect:false},
       plugins:{
         legend:{display:false},
         tooltip:{
           callbacks:{
             title:items=>items[0].label,
-            label:item=>item.datasetIndex===0
-              ?`Revenue: $${item.raw.toFixed(2)}`
-              :`7-day avg: $${item.raw.toFixed(2)}`,
+            label:item=>(item.datasetIndex===0?U().siteLegend:'7-day avg')+': '+U().precise(item.raw),
           }
         }
       },
       scales:{
         x:{grid:{display:false},ticks:{font:{family:'monospace',size:10},color:'#8591a2',maxRotation:0,autoSkip:true,maxTicksLimit:10}},
-        y:{grid:{color:'#e8ebf0'},ticks:{font:{family:'monospace',size:10},color:'#8591a2',callback:v=>'$'+(v>=1000?(v/1000).toFixed(1)+'k':Math.round(v))}},
+        y:{grid:{color:'#e8ebf0'},ticks:{font:{family:'monospace',size:10},color:'#8591a2',callback:v=>U().tick(v)}},
       }
     }
   });
 }
 
-async function openSiteDetail(siteId, siteName, revenueToday){
+// Builds the detail card shell. `daily` may be null while the fetch is in flight.
+function paintSiteDetail(siteId, siteName, daily){
+  const site=SITES_DATA?.sites?.find(s=>String(s.id)===String(siteId));
+  const todayVal=site?fmt(site[U().siteField] ?? 0):'—';
+  const det=$('site-detail');
+  det.style.display='block';
+  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${todayVal}</span></div><p id="site-detail-sub">${daily?'Last 30 days — hover bars for totals.':'Loading…'}</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>${U().siteLegend}</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span></div></div>`;
+  if(daily) renderSiteChart(daily);
+}
+
+async function openSiteDetail(siteId, siteName){
   if(_selectedSiteId===siteId){
     _selectedSiteId=null;
     document.querySelectorAll('.site-card').forEach(c=>c.classList.remove('selected'));
-    const det=$('site-detail'); det.style.display='none';
+    $('site-detail').style.display='none';
     if(siteChart){siteChart.destroy();siteChart=null;}
     return;
   }
   _selectedSiteId=siteId;
   document.querySelectorAll('.site-card').forEach(c=>c.classList.toggle('selected',c.dataset.siteId===String(siteId)));
-  const det=$('site-detail');
-  det.style.display='block';
-  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${fmt(revenueToday)}</span></div><p id="site-detail-sub">Loading…</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>Daily revenue</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span></div></div>`;
+
   if(siteHistoryCache[siteId]){
-    $('site-detail-sub').textContent='Last 30 days — hover bars for totals.';
-    renderSiteChart(siteHistoryCache[siteId]);
+    paintSiteDetail(siteId, siteName, siteHistoryCache[siteId]);
     return;
   }
+  paintSiteDetail(siteId, siteName, null);
   try{
     const r=await fetch(`/api/site-history?siteId=${siteId}`);
     if(!r.ok) throw new Error('HTTP '+r.status);
     const data=await r.json();
     siteHistoryCache[siteId]=data.daily;
     if(_selectedSiteId!==siteId) return;
-    $('site-detail-sub').textContent='Last 30 days — hover bars for totals.';
-    renderSiteChart(data.daily);
+    paintSiteDetail(siteId, siteName, data.daily);
   }catch(e){
-    if(_selectedSiteId===siteId) $('site-detail-sub').textContent='Could not load history: '+e.message;
+    if(_selectedSiteId===siteId){
+      const sub=$('site-detail-sub');
+      if(sub) sub.textContent='Could not load history: '+e.message;
+    }
   }
 }
 
@@ -557,6 +672,13 @@ async function load(){
   try{
     BASELINE=await (await fetch('/api/baseline')).json();
   }catch(e){ showErr('Could not load baseline data.'); return; }
+
+  // Gate kWh on an energy baseline actually existing. Must run after BASELINE is
+  // set and before the first render(), or a persisted 'kwh' mode would compute
+  // against an undefined profile on first paint.
+  KWH_OK = Array.isArray(BASELINE?.profileEnergy?.all);
+  if(!KWH_OK && MODE==='kwh') MODE='rev';
+  syncModeControl();
 
   // Fire today (fast, 1 call) + sites in parallel
   const todayFetch=fetch('/api/today');
@@ -568,7 +690,7 @@ async function load(){
       const j=await r.json().catch(()=>({}));
       if(j.code==='AUTH_INVALID'){ showAuthExpired(); }
       else{ showErr('Live data unavailable: '+(j.error||('HTTP '+r.status))+' — showing typical-day baseline.'); }
-      TODAY={timezone:BASELINE_TZ(),asOfHour:guessHour(),revenueSoFar:typicalByNowFallback(),fetchedAt:null};
+      TODAY=fallbackToday();
     } else {
       TODAY=await r.json();
     }
@@ -606,7 +728,20 @@ function guessHour(){
   const h=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hour12:false}).format(new Date());
   return parseInt(h,10)%24;
 }
-function typicalByNowFallback(){const p=BASELINE.profile.all;let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s}
+function typicalByNowFallback(mode=MODE){
+  const set=BASELINE[UNIT[mode].prof]||BASELINE.profile;
+  const p=set.all||BASELINE.profile.all;
+  let s=0;for(let h=0;h<=guessHour();h++)s+=p[h];return s;
+}
+// Both unit keys are populated so TODAY[U().soFar] resolves in either mode.
+function fallbackToday(){
+  return {
+    timezone:BASELINE_TZ(), asOfHour:guessHour(),
+    revenueSoFar:typicalByNowFallback('rev'),
+    energySoFar:KWH_OK?typicalByNowFallback('kwh'):0,
+    fetchedAt:null,
+  };
+}
 function showErr(m){const e=$('err');e.style.display='block';e.textContent=m}
 function showAuthExpired(){
   const e=$('err');e.style.display='block';e.style.whiteSpace='normal';
@@ -635,12 +770,14 @@ function renderAccuracy(log){
     const pct=Math.round((proj-actual)/actual*100);
     return `<span class="err-pill ${errClass(pct)}">${pct>=0?'+':''}${pct}%</span>`;
   }
-  let html='<table class="acc-table"><thead><tr><th>Date</th><th>DOW</th><th>Actual</th>';
+  // Always labelled with the unit: this table is revenue-only even in kWh mode,
+  // so an unqualified "Actual" would read as a bug when the rest of the page is kWh.
+  let html='<table class="acc-table"><thead><tr><th>Date</th><th>DOW</th><th>Actual $</th>';
   SNAP_LABELS.forEach(l=>html+=`<th>${l}</th>`);
   html+='</tr></thead><tbody>';
   recent.forEach(e=>{
     const holidayMark=e.holiday?' <span title="Holiday — excluded from the baseline model, shown here for reference">＊</span>':'';
-    html+=`<tr><td>${e.date.slice(5)}${holidayMark}</td><td>${e.dow}</td><td>${fmt(e.actual)}</td>`;
+    html+=`<tr><td>${e.date.slice(5)}${holidayMark}</td><td>${e.dow}</td><td>${fmtRev(e.actual)}</td>`;
     SNAP_HOURS.forEach(h=>{
       html+=e.snapshots[h]==null?'<td>—</td>':`<td>${errPill(e.snapshots[h],e.actual)}</td>`;
     });
@@ -672,7 +809,11 @@ async function loadAccuracy(){
 function bindControls(){
   $('site-stats')?.addEventListener('click',e=>{
     const card=e.target.closest('.site-card');
-    if(card) openSiteDetail(card.dataset.siteId, card.dataset.siteName, parseFloat(card.dataset.siteRev));
+    if(card) openSiteDetail(card.dataset.siteId, card.dataset.siteName);
+  });
+  $('unit-toggle')?.addEventListener('click',e=>{
+    const b=e.target.closest('button[data-unit]');
+    if(b&&!b.disabled) setMode(b.dataset.unit);
   });
   $('week-range')?.addEventListener('change',()=>render7DayChart(_accuracyLog));
   $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
@@ -688,6 +829,11 @@ function bindControls(){
 
 function tick(){$('clock-time').textContent=nowInTZ(BASELINE_TZ());updateDot();}
 tick();setInterval(tick,1000*30);
+// Restore the persisted unit before the first render. KWH_OK isn't known until
+// BASELINE loads, so load() re-checks and falls back to '$' if there's no
+// energy profile.
+try{ const m=localStorage.getItem('sc.unitMode'); if(m==='kwh'||m==='rev') MODE=m; }catch(e){}
+syncModeControl();
 bindControls();
 load();
 loadAccuracy();
