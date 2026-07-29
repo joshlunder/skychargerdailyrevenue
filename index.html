@@ -471,10 +471,6 @@ function renderSites(){
   $('site-stats').innerHTML=SITES_DATA.sites
     .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}" data-site-rev="${s.revenueToday}"><div class="k">${s.name}</div><div class="v">${fmt(s.revenueToday)}</div></div>`)
     .join('');
-  $('site-stats').addEventListener('click',e=>{
-    const card=e.target.closest('.site-card');
-    if(card) openSiteDetail(card.dataset.siteId, card.dataset.siteName, parseFloat(card.dataset.siteRev));
-  });
 }
 
 function movingAvg(arr, win=7){
@@ -666,22 +662,33 @@ async function loadAccuracy(){
     _accuracyLog=data;
     renderAccuracy(data);
     render7DayChart(data);
-    $('week-range')?.addEventListener('change',()=>render7DayChart(_accuracyLog));
-    $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
-    $('acc-toggle')?.addEventListener('click',(e)=>{
-      if(e.target.closest('select'))return;
-      const body=$('acc-body'), icon=$('acc-toggle-icon'), sel=$('acc-range');
-      const open=body.style.display!=='none';
-      body.style.display=open?'none':'block';
-      sel.style.display=open?'none':'';
-      icon.classList.toggle('open',!open);
-    });
   }catch(e){}
 }
 
+// All interactive controls are bound exactly once, at init — never inside an async
+// function. Binding after an `await` meant a failed /api/accuracy left the range
+// dropdowns visibly present but inert; binding inside a render function meant
+// handlers accumulated on every 5-minute refresh.
+function bindControls(){
+  $('site-stats')?.addEventListener('click',e=>{
+    const card=e.target.closest('.site-card');
+    if(card) openSiteDetail(card.dataset.siteId, card.dataset.siteName, parseFloat(card.dataset.siteRev));
+  });
+  $('week-range')?.addEventListener('change',()=>render7DayChart(_accuracyLog));
+  $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
+  $('acc-toggle')?.addEventListener('click',(e)=>{
+    if(e.target.closest('select'))return;
+    const body=$('acc-body'), icon=$('acc-toggle-icon'), sel=$('acc-range');
+    const open=body.style.display!=='none';
+    body.style.display=open?'none':'block';
+    sel.style.display=open?'none':'';
+    icon.classList.toggle('open',!open);
+  });
+}
 
 function tick(){$('clock-time').textContent=nowInTZ(BASELINE_TZ());updateDot();}
 tick();setInterval(tick,1000*30);
+bindControls();
 load();
 loadAccuracy();
 setInterval(load,1000*300);
