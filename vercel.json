@@ -9,9 +9,6 @@
     },
     "api/log-accuracy.js": {
       "maxDuration": 60
-    },
-    "api/backfill-energy.js": {
-      "maxDuration": 60
     }
   },
   "crons": [
