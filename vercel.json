@@ -9,6 +9,15 @@
     },
     "api/log-accuracy.js": {
       "maxDuration": 60
+    },
+    "api/today-sites.js": {
+      "maxDuration": 60
+    },
+    "api/today-hourly.js": {
+      "maxDuration": 60
+    },
+    "api/site-history.js": {
+      "maxDuration": 60
     }
   },
   "crons": [

@@ -2,6 +2,8 @@
 // Fetches one org/stats call per completed hour since midnight, batched 5 at a time.
 // Loaded lazily by the frontend after the fast /api/today call renders the stat cards.
 
+import { montaConfigured, montaToken, montaForDate } from "./_monta.js";
+
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
 const API_BASE = "https://www.api.mothership.electriceratechnologies.com";
@@ -80,6 +82,20 @@ async function batchedMap(items, batchSize, fn) {
   return results;
 }
 
+// Monta's 24 hour buckets for today, never throwing.
+async function montaHourlySafe(tz, dateStr) {
+  const blank = Array.from({ length: 24 }, () => ({ revenue: 0, energyKwh: 0 }));
+  if (!montaConfigured()) return { hourly: blank, ok: false, error: "not configured" };
+  try {
+    const token = await montaToken();
+    const { hourly } = await montaForDate(token, { date: dateStr, tz });
+    return { hourly, ok: true };
+  } catch (e) {
+    console.error(`[today-hourly] monta failed: ${e.message || e}`);
+    return { hourly: blank, ok: false, error: String(e.message || e) };
+  }
+}
+
 export default async function handler(req, res) {
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
@@ -95,23 +111,42 @@ export default async function handler(req, res) {
       statsForWindow(token, orgId, localHourISO(tz, dateStr, h), localHourISO(tz, dateStr, h + 1))
     );
 
+    const monta = await montaHourlySafe(tz, dateStr);
+
     // Both cumulatives are precomputed server-side so the frontend chart only has
     // to pick a field name rather than re-accumulate per mode.
-    let running = 0, runningKwh = 0;
-    const hourly = perHour.map(({ revenue, energyKwh }, h) => {
-      running += revenue;
-      runningKwh += energyKwh;
-      return {
-        hour: h,
-        revenue: Number(revenue.toFixed(2)),
-        cumulative: Number(running.toFixed(2)),
-        energyKwh: Number(energyKwh.toFixed(1)),
-        cumulativeKwh: Number(runningKwh.toFixed(1)),
-      };
-    });
+    const accumulate = (arr) => {
+      let running = 0, runningKwh = 0;
+      return arr.map(({ revenue, energyKwh }, h) => {
+        running += revenue;
+        runningKwh += energyKwh;
+        return {
+          hour: h,
+          revenue: Number(revenue.toFixed(2)),
+          cumulative: Number(running.toFixed(2)),
+          energyKwh: Number(energyKwh.toFixed(1)),
+          cumulativeKwh: Number(runningKwh.toFixed(1)),
+        };
+      });
+    };
+
+    // Providers are summed element-wise BEFORE accumulating. Accumulating first and
+    // adding after would double-count the running totals.
+    const combinedRaw = perHour.map((ee, h) => ({
+      revenue: ee.revenue + (monta.hourly[h]?.revenue || 0),
+      energyKwh: ee.energyKwh + (monta.hourly[h]?.energyKwh || 0),
+    }));
 
     res.setHeader("cache-control", "s-maxage=300");
-    res.status(200).json({ asOfHour: nowHour, timezone: tz, hourly });
+    res.status(200).json({
+      asOfHour: nowHour,
+      timezone: tz,
+      hourly: accumulate(combinedRaw),
+      byProvider: {
+        ee: { hourly: accumulate(perHour), ok: true },
+        monta: { hourly: accumulate(monta.hourly.slice(0, nowHour + 1)), ok: monta.ok, error: monta.error },
+      },
+    });
   } catch (err) {
     const code = err.code || "ERROR";
     res.status(code === "AUTH_INVALID" ? 401 : 500)

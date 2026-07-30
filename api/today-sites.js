@@ -3,6 +3,8 @@
 // (same endpoint used by api/today.js, just scoped to one site at a time).
 // Site calls run in parallel batches.
 
+import { montaConfigured, montaToken, montaForDate, MONTA_PREFIX } from "./_monta.js";
+
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
 const API_BASE = "https://www.api.mothership.electriceratechnologies.com";
@@ -68,6 +70,32 @@ async function statsForSite(token, siteId, fromISO, toISO) {
   };
 }
 
+// Monta's CA sites with today's totals, never throwing.
+async function montaSitesSafe(tz, dateStr) {
+  if (!montaConfigured()) return { sites: [], ok: false, error: "not configured" };
+  try {
+    const token = await montaToken();
+    const { sites, perSite } = await montaForDate(token, { date: dateStr, tz });
+    return {
+      ok: true,
+      sites: sites.map(s => {
+        const key = `${MONTA_PREFIX}:${s.id}`;
+        const v = perSite[key] || { revenue: 0, energyKwh: 0 };
+        return {
+          id: key,
+          provider: "monta",
+          name: s.name,
+          revenueToday: Number(v.revenue.toFixed(2)),
+          energyToday: Number(v.energyKwh.toFixed(1)),
+        };
+      }),
+    };
+  } catch (e) {
+    console.error(`[today-sites] monta failed: ${e.message || e}`);
+    return { sites: [], ok: false, error: String(e.message || e) };
+  }
+}
+
 export default async function handler(req, res) {
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
@@ -106,17 +134,28 @@ export default async function handler(req, res) {
       activeSites.map(s => statsForSite(token, s.id, from, to))
     );
 
-    const sites = activeSites
-      .map((s, i) => ({
-        id: s.id,
-        name: s.name,
-        revenueToday: Number(perSite[i].revenue.toFixed(2)),
-        energyToday: Number(perSite[i].energyKwh.toFixed(1)),
-      }))
+    // IDs are namespaced by provider ("ee:190" / "monta:816716"). This prevents a
+    // cache collision in the frontend's siteHistoryCache, and doubles as the
+    // provider router for /api/site-history and the provider-toggle filter.
+    const eeSites = activeSites.map((s, i) => ({
+      id: `ee:${s.id}`,
+      provider: "ee",
+      name: s.name,
+      revenueToday: Number(perSite[i].revenue.toFixed(2)),
+      energyToday: Number(perSite[i].energyKwh.toFixed(1)),
+    }));
+
+    const monta = await montaSitesSafe(tz, dateStr);
+
+    const sites = [...eeSites, ...monta.sites]
       .sort((a, b) => b.revenueToday - a.revenueToday);
 
     res.setHeader("cache-control", "s-maxage=300");
-    res.status(200).json({ sites, fetchedAt: new Date().toISOString() });
+    res.status(200).json({
+      sites,
+      providers: { ee: { ok: true }, monta: { ok: monta.ok, error: monta.error } },
+      fetchedAt: new Date().toISOString(),
+    });
   } catch (err) {
     const code = err.code || "ERROR";
     res.status(code === "AUTH_INVALID" ? 401 : 500)

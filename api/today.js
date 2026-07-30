@@ -2,6 +2,8 @@
 // One org/stats call from midnight ET to now. Returns revenueSoFar + asOfHour only.
 // Hourly breakdown for the intraday chart is fetched separately by /api/today-hourly.
 
+import { montaConfigured, montaToken, montaForDate } from "./_monta.js";
+
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
 const API_BASE = "https://www.api.mothership.electriceratechnologies.com";
@@ -49,6 +51,20 @@ function currentLocalHour(tz) {
   return parseInt(h, 10) % 24;
 }
 
+// Monta contribution for today, never throwing — a Monta failure degrades that one
+// provider rather than the whole endpoint.
+async function montaTodaySafe(tz, dateStr) {
+  if (!montaConfigured()) return { revenue: 0, energyKwh: 0, ok: false, error: "not configured" };
+  try {
+    const token = await montaToken();
+    const { totals } = await montaForDate(token, { date: dateStr, tz });
+    return { ...totals, ok: true };
+  } catch (e) {
+    console.error(`[today] monta failed: ${e.message || e}`);
+    return { revenue: 0, energyKwh: 0, ok: false, error: String(e.message || e) };
+  }
+}
+
 export default async function handler(req, res) {
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
@@ -70,18 +86,27 @@ export default async function handler(req, res) {
     }
     const data = await r.json();
     const agg = data.aggregateStats;
-    const revenueSoFar = (agg?.totalRevenue || 0) / 100;
+    const eeRevenue = (agg?.totalRevenue || 0) / 100;
     // totalEnergy is already in kWh (no divisor) — verified 2026-07-28 against
     // 2026-07-27: totalEnergy 3162.64 vs averageEnergyKwh 40.5467 x 78 sessions
     // = 3162.64 exactly, implied rate $0.507/kWh.
-    const energySoFar = agg?.totalEnergy || 0;
+    const eeEnergy = agg?.totalEnergy || 0;
+
+    // Monta runs in its own try/catch: a Monta outage must never take down the
+    // EE numbers, it just marks that provider degraded.
+    const monta = await montaTodaySafe(tz, dateStr);
 
     res.setHeader("cache-control", "s-maxage=300");
     res.status(200).json({
       asOfHour: currentLocalHour(tz),
       timezone: tz,
-      revenueSoFar: Number(revenueSoFar.toFixed(2)),
-      energySoFar: Number(energySoFar.toFixed(1)),
+      // Top-level values stay the COMBINED totals so existing consumers are unchanged.
+      revenueSoFar: Number((eeRevenue + monta.revenue).toFixed(2)),
+      energySoFar: Number((eeEnergy + monta.energyKwh).toFixed(1)),
+      byProvider: {
+        ee: { revenueSoFar: Number(eeRevenue.toFixed(2)), energySoFar: Number(eeEnergy.toFixed(1)), ok: true },
+        monta: { revenueSoFar: Number(monta.revenue.toFixed(2)), energySoFar: Number(monta.energyKwh.toFixed(1)), ok: monta.ok, error: monta.error },
+      },
       fetchedAt: new Date().toISOString(),
     });
   } catch (err) {

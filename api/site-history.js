@@ -2,6 +2,8 @@
 // GET /api/site-history?siteId=X
 // Returns { siteId, daily: [{date, revenue}] } — 30 completed days, oldest first.
 
+import { montaConfigured, montaToken, montaBuckets, MONTA_PREFIX } from "./_monta.js";
+
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
 const API_BASE = "https://www.api.mothership.electriceratechnologies.com";
@@ -56,7 +58,13 @@ async function statsForDay(token, siteId, dateStr, nextDateStr, offset) {
   const to = encodeURIComponent(`${nextDateStr}T00:00:00${offset}`);
   const url = `${API_BASE}/api/v1/organization/stats?siteIds=${siteId}&from=${from}&to=${to}`;
   const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (!r.ok) return { revenue: 0, energyKwh: 0 };
+  // Throw rather than returning zeros: a silent {0,0} renders as a legitimate-looking
+  // flat chart, which is exactly how a mis-routed provider ID used to fail.
+  if (!r.ok) {
+    const e = new Error(`ee site stats ${siteId} -> ${r.status}`);
+    e.code = (r.status === 401 || r.status === 403) ? "AUTH_INVALID" : "STATS_ERROR";
+    throw e;
+  }
   const agg = (await r.json()).aggregateStats;
   return {
     revenue: (agg?.totalRevenue || 0) / 100,
@@ -68,10 +76,17 @@ export default async function handler(req, res) {
   const { siteId } = req.query;
   if (!siteId) return res.status(400).json({ error: "siteId required" });
 
+  // IDs arrive namespaced ("ee:190" / "monta:816716"). A bare ID is treated as EE
+  // for backwards compatibility with any cached frontend still sending the old form.
+  const sep = String(siteId).indexOf(":");
+  const provider = sep === -1 ? "ee" : String(siteId).slice(0, sep);
+  const rawId = sep === -1 ? String(siteId) : String(siteId).slice(sep + 1);
+  if (provider !== "ee" && provider !== MONTA_PREFIX) {
+    return res.status(400).json({ error: `unknown provider "${provider}"`, code: "UNKNOWN_PROVIDER" });
+  }
+
   try {
     const tz = process.env.EE_TIMEZONE || "America/New_York";
-    const token = await getToken();
-    const offset = utcOffsetString(tz);
     const DAYS = 30;
 
     // Build 30 day pairs: oldest first (30 days ago → yesterday)
@@ -83,18 +98,35 @@ export default async function handler(req, res) {
       });
     }
 
-    const perDay = await Promise.all(
-      pairs.map(({ date, next }) => statsForDay(token, siteId, date, next, offset))
-    );
-
-    const daily = pairs.map(({ date }, i) => ({
-      date,
-      revenue: Number(perDay[i].revenue.toFixed(2)),
-      energyKwh: Number(perDay[i].energyKwh.toFixed(1)),
-    }));
+    let daily;
+    if (provider === MONTA_PREFIX) {
+      if (!montaConfigured()) {
+        return res.status(503).json({ error: "monta not configured", code: "MONTA_UNCONFIGURED" });
+      }
+      // One windowed fetch covers all 30 days; buckets are keyed by local date.
+      const mToken = await montaToken();
+      const { byDate } = await montaBuckets(mToken, {
+        fromDate: pairs[0].date, toDate: pairs[pairs.length - 1].date, tz, siteIds: [Number(rawId)],
+      });
+      daily = pairs.map(({ date }) => {
+        const v = byDate[date] || { revenue: 0, energyKwh: 0 };
+        return { date, revenue: Number(v.revenue.toFixed(2)), energyKwh: Number(v.energyKwh.toFixed(1)) };
+      });
+    } else {
+      const token = await getToken();
+      const offset = utcOffsetString(tz);
+      const perDay = await Promise.all(
+        pairs.map(({ date, next }) => statsForDay(token, rawId, date, next, offset))
+      );
+      daily = pairs.map(({ date }, i) => ({
+        date,
+        revenue: Number(perDay[i].revenue.toFixed(2)),
+        energyKwh: Number(perDay[i].energyKwh.toFixed(1)),
+      }));
+    }
 
     res.setHeader("cache-control", "s-maxage=3600");
-    res.status(200).json({ siteId, daily });
+    res.status(200).json({ siteId, provider, daily });
   } catch (err) {
     const code = err.code || "ERROR";
     res.status(code === "AUTH_INVALID" ? 401 : 500)
