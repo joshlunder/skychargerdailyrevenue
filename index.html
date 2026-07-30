@@ -41,6 +41,18 @@
   .live-dot.fresh{background:var(--green)}
   .live-dot.stale{background:var(--warn)}
 
+  /* Confidence meter — sits under the clock, right-aligned to match it. */
+  .clock-stack{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .confidence{display:none;flex-direction:column;align-items:flex-end;gap:3px;padding-right:2px}
+  .conf-row{display:flex;align-items:center;gap:8px;font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .conf-bars{display:inline-flex;gap:2px}
+  .conf-bars i{width:5px;height:11px;border-radius:1px;background:var(--line);transition:background .3s}
+  .conf-bars i.on{background:var(--blue-vivid)}
+  .conf-bars.low i.on{background:var(--warn)}
+  .conf-bars.med i.on{background:#7dd8f5}
+  .conf-label{font-weight:500;letter-spacing:.1em;color:var(--ink)}
+  .conf-detail{font-family:'Spline Sans Mono',monospace;font-size:10px;color:var(--muted);letter-spacing:.02em}
+
   .hero{margin-bottom:52px}
   .hero .label{
     font-family:'Spline Sans Mono',monospace;font-size:12px;letter-spacing:.2em;
@@ -138,7 +150,17 @@
 <div class="wrap">
   <header>
     <img src="./skycharger-logo.jpg" alt="Skycharger" style="height:38px;width:auto;display:block">
-    <div class="clock" id="clock"><span class="live-dot" id="dot"></span><span id="clock-time">—</span></div>
+    <div class="clock-stack">
+      <div class="clock" id="clock"><span class="live-dot" id="dot"></span><span id="clock-time">—</span></div>
+      <div class="confidence" id="confidence">
+        <div class="conf-row">
+          <span>Confidence</span>
+          <span class="conf-bars" id="conf-bars"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="conf-label" id="conf-label">—</span>
+        </div>
+        <div class="conf-detail" id="conf-detail"></div>
+      </div>
+    </div>
   </header>
 
   <div class="err" id="err"></div>
@@ -316,6 +338,7 @@ function render(){
   else{pb.className='pace down';pb.textContent=`projected ${dayPct}% vs typical day`;}
   const confPct=Math.round(c.confidenceDisplay*100);
   $('sub').textContent=`${confPct}% of the day complete.`;
+  renderConfidence(c);
   $('stats').innerHTML=[
     [u.soFarLabel,fmt(c.soFar)],
     ['Typical by now',fmt(c.typicalByNow)],
@@ -327,6 +350,55 @@ function render(){
   $('chart-title').textContent = `Today vs a typical ${typLabel}`;
   $('chart-legend-typical').textContent = `Typical ${typLabel}`;
   $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Accuracy improves as the day progresses.`;
+}
+
+// Mean absolute projection error, in percent, for projections made at `hour` —
+// measured from the logged snapshots rather than assumed. Interpolates between the
+// two nearest snapshot hours, and returns null when there isn't enough history.
+function empiricalErrorPct(hour){
+  if(!Array.isArray(_accuracyLog)||_accuracyLog.length<7) return null;
+  const errAt=h=>{
+    const vals=_accuracyLog
+      .filter(e=>e.actual>0 && e.snapshots && e.snapshots[h]!=null)
+      .map(e=>Math.abs((e.snapshots[h]-e.actual)/e.actual*100));
+    return vals.length>=7 ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+  };
+  // Before the first snapshot hour the projection is at its least informed, so
+  // clamp to the earliest measured error rather than extrapolating past it.
+  if(hour<=SNAP_HOURS[0]) return errAt(SNAP_HOURS[0]);
+  if(hour>=SNAP_HOURS[SNAP_HOURS.length-1]) return errAt(SNAP_HOURS[SNAP_HOURS.length-1]);
+  for(let i=0;i<SNAP_HOURS.length-1;i++){
+    const a=SNAP_HOURS[i], b=SNAP_HOURS[i+1];
+    if(hour>=a&&hour<=b){
+      const ea=errAt(a), eb=errAt(b);
+      if(ea==null||eb==null) return ea??eb;
+      const t=(hour-a)/(b-a);
+      return ea+(eb-ea)*t;
+    }
+  }
+  return null;
+}
+
+function renderConfidence(c){
+  const box=$('confidence'); if(!box||!c) return;
+  const pct=Math.round(c.confidenceDisplay*100);
+  // Confidence tracks how much of a typical day has actually elapsed — that's what
+  // shrinks the projection's guesswork (see blendedPace in compute()).
+  const filled=Math.max(1,Math.min(5,Math.ceil(c.confidenceDisplay*5)));
+  const tier=filled<=2?'low':(filled<=3?'med':'high');
+  const label=tier==='low'?'Low':(tier==='med'?'Moderate':'High');
+  const bars=$('conf-bars');
+  bars.className='conf-bars '+(tier==='high'?'':tier);
+  [...bars.children].forEach((el,i)=>el.classList.toggle('on',i<filled));
+  $('conf-label').textContent=label;
+  const err=empiricalErrorPct(c.nowHour);
+  $('conf-detail').textContent = err==null
+    ? `${pct}% of day complete`
+    : `${pct}% of day · typically ±${err<10?err.toFixed(1):Math.round(err)}%`;
+  box.title = err==null
+    ? 'Confidence rises as more of the day is complete.'
+    : `Projections made around this hour have historically landed within ~${Math.round(err)}% of the final total (${_accuracyLog.length} days of history).`;
+  box.style.display='flex';
 }
 
 // Reflects MODE onto the toggle, and disables kWh when no energy baseline exists
@@ -596,6 +668,10 @@ function renderSiteChart(daily){
   });
   const values=daily.map(d=>d[U().dailyField] ?? 0);
   const avgs=movingAvg(values,7);
+  // Flat reference line at the mean of the whole window. The 7-day curve crossing
+  // above or below it is the trend signal: recent pace vs the trailing month.
+  const mean30=values.length?values.reduce((a,b)=>a+b,0)/values.length:0;
+  const mean30Line=values.map(()=>mean30);
   if(siteChart){siteChart.destroy();siteChart=null;}
   const ctx=document.getElementById('site-chart');
   if(!ctx) return;
@@ -603,8 +679,9 @@ function renderSiteChart(daily){
     data:{
       labels,
       datasets:[
-        {type:'bar',label:'Daily',data:values,backgroundColor:'#b8c4cf',borderRadius:3,order:2},
+        {type:'bar',label:'Daily',data:values,backgroundColor:'#b8c4cf',borderRadius:3,order:3},
         {type:'line',label:'7-day avg',data:avgs,borderColor:'#29bde8',borderWidth:2,pointRadius:0,tension:0.4,fill:false,order:1},
+        {type:'line',label:'30-day avg',data:mean30Line,borderColor:'#8591a2',borderWidth:1.5,borderDash:[5,4],pointRadius:0,fill:false,order:2},
       ]
     },
     options:{
@@ -615,7 +692,7 @@ function renderSiteChart(daily){
         tooltip:{
           callbacks:{
             title:items=>items[0].label,
-            label:item=>(item.datasetIndex===0?U().siteLegend:'7-day avg')+': '+U().precise(item.raw),
+            label:item=>(item.datasetIndex===0?U().siteLegend:item.dataset.label)+': '+U().precise(item.raw),
           }
         }
       },
@@ -633,7 +710,7 @@ function paintSiteDetail(siteId, siteName, daily){
   const todayVal=site?fmt(site[U().siteField] ?? 0):'—';
   const det=$('site-detail');
   det.style.display='block';
-  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${todayVal}</span></div><p id="site-detail-sub">${daily?'Last 30 days — hover bars for totals.':'Loading…'}</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>${U().siteLegend}</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span></div></div>`;
+  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${todayVal}</span></div><p id="site-detail-sub">${daily?'Last 30 days — hover bars for totals.':'Loading…'}</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>${U().siteLegend}</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span><span style="display:flex;align-items:center;gap:6px"><i style="background:repeating-linear-gradient(90deg,#8591a2 0 5px,transparent 5px 9px);height:2px;width:18px"></i>30-day avg</span></div></div>`;
   if(daily) renderSiteChart(daily);
 }
 
@@ -799,6 +876,9 @@ async function loadAccuracy(){
     _accuracyLog=data;
     renderAccuracy(data);
     render7DayChart(data);
+    // The first render() runs before this fetch resolves, so the meter starts
+    // without an error band. Refresh it now that history is available.
+    const c=compute(); if(c) renderConfidence(c);
   }catch(e){}
 }
 
