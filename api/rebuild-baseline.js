@@ -1,4 +1,5 @@
 import { put } from "@vercel/blob";
+import { montaConfigured, montaToken, montaBuckets } from "./_monta.js";
 
 const AUTH_URL = "https://electricera.us.auth0.com/oauth/token";
 const AUDIENCE = "api.mothership.electriceratechnologies.com";
@@ -115,6 +116,26 @@ function utcOffsetString(tz, refDate) {
   return `${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
 }
 
+// Monta's whole rolling window in ONE padded fetch, attributed locally by date+hour.
+// Never throws — a Monta failure is surfaced via .ok so the per-provider guard below
+// can refuse the write rather than silently baking an EE-only baseline.
+async function montaWindowSafe(tz, windowDays) {
+  const empty = { byDateHour: {}, ok: false, error: "not configured" };
+  if (!montaConfigured()) return empty;
+  try {
+    const day = n => new Intl.DateTimeFormat("en-CA", { timeZone: tz })
+      .format(new Date(Date.now() - n * 86400000));
+    const token = await montaToken();
+    const { byDateHour } = await montaBuckets(token, {
+      fromDate: day(windowDays), toDate: day(1), tz,
+    });
+    return { byDateHour, ok: true };
+  } catch (e) {
+    console.error(`[rebuild-baseline] monta failed: ${e.message || e}`);
+    return { byDateHour: {}, ok: false, error: String(e.message || e) };
+  }
+}
+
 export default async function handler(req, res) {
   console.log(`[rebuild-baseline] start ${new Date().toISOString()}`);
   try {
@@ -124,10 +145,18 @@ export default async function handler(req, res) {
     console.log("[rebuild-baseline] auth token obtained");
 
     const DAYS = ["all", "weekday", "weekend", "mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-    const buckets = Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
-    const bucketsKwh = Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
-    // Weight counts are shared — same days, same holiday exclusions, both units.
+    const mkBuckets = () => Object.fromEntries(DAYS.map(k => [k, Array(24).fill(0)]));
+    // One bucket set per provider; the combined profile is their element-wise sum.
+    const B = {
+      ee:    { rev: mkBuckets(), kwh: mkBuckets(), totalRev: 0, totalKwh: 0 },
+      monta: { rev: mkBuckets(), kwh: mkBuckets(), totalRev: 0, totalKwh: 0 },
+    };
+    // Weight counts are shared — same days, same holiday exclusions, both providers.
     const wdays = Object.fromEntries(DAYS.map(k => [k, 0]));
+
+    // Monta's entire window comes from ONE padded fetch (~45 calls vs EE's 840),
+    // then is attributed locally by date+hour.
+    const monta = await montaWindowSafe(tz, WINDOW_DAYS);
 
     for (let d = 1; d <= WINDOW_DAYS; d++) {
       const refDate = new Date(Date.now() - d * 86400000);
@@ -169,46 +198,83 @@ export default async function handler(req, res) {
         }));
         hourStats.push(...results);
       }
-      hourStats.forEach(({ revenue, energyKwh }, h) => {
-        buckets.all[h] += revenue * weight;
-        buckets[wk][h] += revenue * weight;
-        buckets[dow][h] += revenue * weight;
-        bucketsKwh.all[h] += energyKwh * weight;
-        bucketsKwh[wk][h] += energyKwh * weight;
-        bucketsKwh[dow][h] += energyKwh * weight;
-      });
+      const addTo = (p, h, revenue, energyKwh) => {
+        p.rev.all[h] += revenue * weight;
+        p.rev[wk][h] += revenue * weight;
+        p.rev[dow][h] += revenue * weight;
+        p.kwh.all[h] += energyKwh * weight;
+        p.kwh[wk][h] += energyKwh * weight;
+        p.kwh[dow][h] += energyKwh * weight;
+        p.totalRev += revenue;
+        p.totalKwh += energyKwh;
+      };
+      hourStats.forEach(({ revenue, energyKwh }, h) => addTo(B.ee, h, revenue, energyKwh));
+      const mHours = monta.byDateHour[dateStr];
+      if (mHours) {
+        mHours.forEach(({ revenue, energyKwh }, h) => addTo(B.monta, h, revenue, energyKwh));
+      }
     }
 
-    console.log(`[rebuild-baseline] fetched ${WINDOW_DAYS} days of hourly data`);
+    console.log(`[rebuild-baseline] fetched ${WINDOW_DAYS} days — ee $${B.ee.totalRev.toFixed(0)}/${B.ee.totalKwh.toFixed(0)}kWh, monta $${B.monta.totalRev.toFixed(0)}/${B.monta.totalKwh.toFixed(0)}kWh`);
 
-    const profile = {};
-    const profileEnergy = {};
-    for (const k of DAYS) {
-      profile[k] = buckets[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
-      profileEnergy[k] = bucketsKwh[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
-    }
+    const avg = (arr, k) => arr[k].map(v => Number((v / Math.max(1, wdays[k])).toFixed(2)));
+    const profileFor = p => Object.fromEntries(DAYS.map(k => [k, avg(p.rev, k)]));
+    const energyFor = p => Object.fromEntries(DAYS.map(k => [k, avg(p.kwh, k)]));
+
+    const providers = {
+      ee:    { profile: profileFor(B.ee),    profileEnergy: energyFor(B.ee) },
+      monta: { profile: profileFor(B.monta), profileEnergy: energyFor(B.monta) },
+    };
+
+    // Combined = element-wise sum of the providers, kept at the top level so every
+    // existing consumer (log-accuracy's replay, the frontend default) is unchanged.
+    const sumKeys = sel => Object.fromEntries(DAYS.map(k => [
+      k, providers.ee[sel][k].map((v, h) => Number((v + providers.monta[sel][k][h]).toFixed(2))),
+    ]));
+    const profile = sumKeys("profile");
+    const profileEnergy = sumKeys("profileEnergy");
+
     const out = {
-      meta: { source: `rolling ${WINDOW_DAYS} days (recency-weighted: last ${RECENT_DAYS}d at ${RECENT_WEIGHT}x, holidays excluded)`, generated: new Date().toISOString(), days: WINDOW_DAYS },
+      meta: {
+        source: `rolling ${WINDOW_DAYS} days (recency-weighted: last ${RECENT_DAYS}d at ${RECENT_WEIGHT}x, holidays excluded)`,
+        generated: new Date().toISOString(),
+        days: WINDOW_DAYS,
+        providers: ["ee", "monta"],
+      },
       profile,
       profileEnergy,
+      providers,
     };
 
     // Sanity gate before a destructive overwrite. This endpoint writes with
-    // addRandomSuffix:false and Blob keeps no version history, so a run that
-    // silently returned mostly zeros (EE outage, auth edge case) would replace a
-    // good baseline with a bad one and skew the dashboard's headline number until
-    // the next Monday. Refuse to write anything that fails a floor check.
+    // addRandomSuffix:false and Blob keeps no version history, so a bad run would
+    // replace a good baseline with no way back.
+    //
+    // A single global floor is NOT sufficient with two providers: if Monta failed
+    // entirely and EE succeeded, the combined total would still clear any global
+    // floor and we'd silently bake an EE-only baseline for a week. So require every
+    // provider to have contributed something — neither can legitimately be zero
+    // across 35 days (Pepsi alone delivers ~2,200 kWh/day).
+    const allProfiles = [...Object.values(profile), ...Object.values(profileEnergy),
+      ...Object.values(providers.ee.profile), ...Object.values(providers.ee.profileEnergy),
+      ...Object.values(providers.monta.profile), ...Object.values(providers.monta.profileEnergy)];
+    const allFinite = allProfiles.every(arr => arr.length === 24 && arr.every(Number.isFinite));
     const revSum = profile.all.reduce((a, b) => a + b, 0);
     const kwhSum = profileEnergy.all.reduce((a, b) => a + b, 0);
-    const allFinite = [...Object.values(profile), ...Object.values(profileEnergy)]
-      .every(arr => arr.length === 24 && arr.every(Number.isFinite));
-    if (!allFinite || revSum < 500 || kwhSum < 1000) {
-      const msg = `refusing to write implausible baseline: revenue/day=$${revSum.toFixed(2)}, energy/day=${kwhSum.toFixed(1)}kWh, allFinite=${allFinite}`;
+    const emptyProviders = Object.entries(B)
+      .filter(([, p]) => p.totalKwh <= 0)
+      .map(([name]) => name);
+
+    if (!allFinite || revSum < 500 || kwhSum < 1000 || emptyProviders.length) {
+      const msg = `refusing to write implausible baseline: revenue/day=$${revSum.toFixed(2)}, ` +
+        `energy/day=${kwhSum.toFixed(1)}kWh, allFinite=${allFinite}` +
+        (emptyProviders.length ? `, providers with no data: ${emptyProviders.join(", ")}` : "") +
+        (monta.ok ? "" : ` (monta fetch error: ${monta.error})`);
       console.error(`[rebuild-baseline] ABORT: ${msg}`);
-      return res.status(500).json({ error: msg, code: "IMPLAUSIBLE_BASELINE", profile, profileEnergy });
+      return res.status(500).json({ error: msg, code: "IMPLAUSIBLE_BASELINE", profile, profileEnergy, providers });
     }
 
-    console.log(`[rebuild-baseline] guard passed (revenue/day=$${revSum.toFixed(2)}, energy/day=${kwhSum.toFixed(1)}kWh); writing baseline.json`);
+    console.log(`[rebuild-baseline] guard passed (revenue/day=$${revSum.toFixed(2)}, energy/day=${kwhSum.toFixed(1)}kWh, both providers non-empty); writing baseline.json`);
     const { url } = await put("baseline.json", JSON.stringify(out), {
       access: "public",
       addRandomSuffix: false,

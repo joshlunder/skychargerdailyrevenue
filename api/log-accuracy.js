@@ -3,6 +3,7 @@
 // Saves a rolling 90-day log to Blob as accuracy-log.json.
 
 import { put, list } from "@vercel/blob";
+import { montaConfigured, montaToken, montaForDate } from "./_monta.js";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -110,6 +111,19 @@ function utcOffsetString(tz, refDate) {
   return `${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
 }
 
+// Monta totals for one ET day, never throwing.
+async function montaDaySafe(tz, dateStr) {
+  if (!montaConfigured()) return { revenue: 0, energyKwh: 0, ok: false };
+  try {
+    const token = await montaToken();
+    const { totals } = await montaForDate(token, { date: dateStr, tz });
+    return { ...totals, ok: true };
+  } catch (e) {
+    console.error(`[log-accuracy] monta failed: ${e.message || e}`);
+    return { revenue: 0, energyKwh: 0, ok: false };
+  }
+}
+
 export default async function handler(req, res) {
   console.log(`[log-accuracy] start ${new Date().toISOString()}`);
   try {
@@ -157,9 +171,19 @@ export default async function handler(req, res) {
     // needs no mode awareness and this file keeps exactly one copy of the model.
     const hourRevenues = hourStats.map(s => s.revenue);
 
-    const actual = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
-    const actualKwh = Number(hourStats.reduce((a, s) => a + s.energyKwh, 0).toFixed(1));
-    console.log(`[log-accuracy] fetched ${hourStats.length} hours for ${dateStr}, actual=$${actual}, ${actualKwh}kWh${holiday ? " (holiday)" : ""}`);
+    const actualEe = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
+    const actualKwhEe = Number(hourStats.reduce((a, s) => a + s.energyKwh, 0).toFixed(1));
+
+    // Monta's contribution to the same ET day.
+    const monta = await montaDaySafe(tz, dateStr);
+    const actualMonta = Number(monta.revenue.toFixed(2));
+    const actualKwhMonta = Number(monta.energyKwh.toFixed(1));
+
+    // Combined totals are what the week chart reads; the per-provider fields are
+    // preserved so the provider toggle can filter and the backfill stays idempotent.
+    const actual = Number((actualEe + actualMonta).toFixed(2));
+    const actualKwh = Number((actualKwhEe + actualKwhMonta).toFixed(1));
+    console.log(`[log-accuracy] ${dateStr}: ee $${actualEe}/${actualKwhEe}kWh + monta $${actualMonta}/${actualKwhMonta}kWh = $${actual}/${actualKwh}kWh${holiday ? " (holiday)" : ""}${monta.ok ? "" : " [monta degraded]"}`);
 
     // Load baseline (Blob first, then bundled fallback)
     let baseline;
@@ -211,7 +235,7 @@ export default async function handler(req, res) {
     // from the baseline calculation (rebuild-baseline.js) since they'd skew what
     // "typical" looks like, but that doesn't mean the day itself should be invisible.
     log = log.filter(e => e.date !== dateStr);
-    log.push({ date: dateStr, dow, actual, actualKwh, snapshots, ...(holiday ? { holiday: true } : {}) });
+    log.push({ date: dateStr, dow, actual, actualKwh, actualEe, actualKwhEe, actualMonta, actualKwhMonta, snapshots, ...(holiday ? { holiday: true } : {}) });
     log = log.slice(-90);
 
     console.log(`[log-accuracy] writing accuracy-log.json (${log.length} entries)`);
@@ -221,7 +245,7 @@ export default async function handler(req, res) {
       contentType: "application/json",
     });
 
-    res.status(200).json({ logged: dateStr, dow, actual, actualKwh, snapshots, holiday });
+    res.status(200).json({ logged: dateStr, dow, actual, actualKwh, actualEe, actualKwhEe, actualMonta, actualKwhMonta, montaOk: monta.ok, snapshots, holiday });
   } catch (err) {
     console.error(`[log-accuracy] ABORT: ${err.message || err}`);
     res.status(err.code === "AUTH_INVALID" ? 401 : 500).json({ error: String(err.message || err), code: err.code || "ERROR" });
