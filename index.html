@@ -61,6 +61,7 @@
   /* Row owns the label's bottom margin so vertical rhythm is unchanged. */
   .hero-label-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
   .hero-label-row .label{margin-bottom:0}
+  .toggle-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .unit-toggle{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex-shrink:0}
   .unit-toggle button{
     font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
@@ -168,9 +169,16 @@
   <section class="hero">
     <div class="hero-label-row">
       <div class="label" id="hero-label">Projected revenue · end of today</div>
-      <div class="unit-toggle" id="unit-toggle" role="group" aria-label="Display unit">
-        <button type="button" data-unit="rev" class="active" aria-pressed="true">$</button>
-        <button type="button" data-unit="kwh" aria-pressed="false">kWh</button>
+      <div class="toggle-group">
+        <div class="unit-toggle" id="provider-toggle" role="group" aria-label="Provider">
+          <button type="button" data-provider="all" class="active" aria-pressed="true">All</button>
+          <button type="button" data-provider="ee" aria-pressed="false">Electric Era</button>
+          <button type="button" data-provider="monta" aria-pressed="false">Monta</button>
+        </div>
+        <div class="unit-toggle" id="unit-toggle" role="group" aria-label="Display unit">
+          <button type="button" data-unit="rev" class="active" aria-pressed="true">$</button>
+          <button type="button" data-unit="kwh" aria-pressed="false">kWh</button>
+        </div>
       </div>
     </div>
     <div class="projection" id="projection"><span class="loading">loading…</span></div>
@@ -229,7 +237,7 @@
       </select>
     </div>
     <div class="acc-body" id="acc-body" style="display:none">
-      <p>How close end-of-day projections were at each 2-hour check-in vs. what actually happened. Logged automatically each night.</p>
+      <p>How close end-of-day projections were at each 2-hour check-in vs. what actually happened. Logged automatically each night. Always all sites and dollars — the provider and kWh toggles don't apply here, since this measures the model itself.</p>
       <div class="acc-wrap" id="accuracy-table-wrap"></div>
     </div>
   </section>
@@ -277,6 +285,51 @@ const UNIT={
 };
 const U=()=>UNIT[MODE];
 
+// Provider scope. 'all' sums the providers; 'ee'/'monta' isolate one.
+let PROVIDER='all';      // 'all' | 'ee' | 'monta'
+let MONTA_OK=false;      // set once data loads; false disables the Monta segment
+const PROVIDERS={
+  all:   { label:'All',           actualSuffix:'' },
+  ee:    { label:'Electric Era',  actualSuffix:'Ee' },
+  monta: { label:'Monta',         actualSuffix:'Monta' },
+};
+
+// Element-wise sum of two 24-hour profile arrays.
+const addArr=(a,b)=>a.map((v,i)=>v+(b?.[i]||0));
+
+// The baseline profile set for the current provider scope and unit. Falls back to
+// the combined top-level curves when per-provider profiles aren't in the blob yet
+// (i.e. before the first per-provider rebuild), so the dashboard still renders.
+function profileSet(){
+  const sel=U().prof;                    // 'profile' | 'profileEnergy'
+  const pv=BASELINE?.providers;
+  if(PROVIDER!=='all'&&pv?.[PROVIDER]?.[sel]) return pv[PROVIDER][sel];
+  if(PROVIDER==='all'&&pv?.ee?.[sel]&&pv?.monta?.[sel]){
+    const a=pv.ee[sel], b=pv.monta[sel];
+    return Object.fromEntries(Object.keys(a).map(k=>[k,addArr(a[k],b[k])]));
+  }
+  return BASELINE?.[sel]||BASELINE?.profile;
+}
+
+// Today's so-far value for the current provider scope and unit.
+function soFarValue(){
+  const field=U().soFar;                 // 'revenueSoFar' | 'energySoFar'
+  if(PROVIDER==='all') return TODAY?.[field] ?? 0;
+  return TODAY?.byProvider?.[PROVIDER]?.[field] ?? 0;
+}
+
+// Accuracy-log field for the current provider scope and unit, e.g. actualKwhMonta.
+function actualField(){
+  const base=U().actualField;            // 'actual' | 'actualKwh'
+  return base+PROVIDERS[PROVIDER].actualSuffix;
+}
+
+// One hour's cumulative value for the current provider scope.
+function hourlySeries(){
+  if(PROVIDER==='all') return TODAY?.hourly;
+  return TODAY?.byProviderHourly?.[PROVIDER];
+}
+
 function fmt(n){return U().fmt(n)}
 // The projection-accuracy table stays revenue-only by design, so it must not
 // follow MODE — it keeps its own formatter.
@@ -293,7 +346,9 @@ function pickProfile(tz, mode=MODE){
   // Fall back to the revenue profile if an energy profile is missing — unreachable
   // while KWH_OK gates the toggle, but prevents a half-written blob from blanking
   // the whole dashboard with a TypeError.
-  const p=BASELINE[UNIT[mode].prof]||BASELINE.profile;
+  const prev=MODE; MODE=mode;
+  let p;
+  try{ p=profileSet()||BASELINE.profile; } finally { MODE=prev; }
   return p[dow]||p.all;
 }
 
@@ -305,7 +360,7 @@ function compute(){
   const fullTypical=cum[23];
   const nowHour=TODAY.asOfHour;
   const typicalByNow=cum[nowHour];
-  const soFar=TODAY[U().soFar] ?? 0;
+  const soFar=soFarValue();
   const pace = typicalByNow>0 ? soFar/typicalByNow : 1;
   const confidence = typicalByNow/fullTypical;
   const blendedPace = confidence*pace + (1-confidence)*1.0;
@@ -349,7 +404,16 @@ function render(){
   render7DayChart(_accuracyLog);
   $('chart-title').textContent = `Today vs a typical ${typLabel}`;
   $('chart-legend-typical').textContent = `Typical ${typLabel}`;
-  $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via Electric Era, cached 5 min. Accuracy improves as the day progresses.`;
+  const provNote = PROVIDER==='all' ? 'Electric Era + Monta' : PROVIDERS[PROVIDER].label;
+  $('foot').innerHTML=`Baseline: ${BASELINE.meta.source} (${BASELINE.meta.days} days). Live data via ${provNote}, cached 5 min. Accuracy improves as the day progresses.`;
+}
+
+// Which "actual" a day's snapshots should be measured against. Days logged before
+// Monta joined the model hold EE-only projections and carry no snapshotScope, so
+// they're compared against the EE-only actual — otherwise every historical row
+// would look ~10% low against a combined total it never tried to predict.
+function snapBasis(e){
+  return e.snapshotScope==='all' ? e.actual : (e.actualEe ?? e.actual);
 }
 
 // Mean absolute projection error, in percent, for projections made at `hour` —
@@ -359,8 +423,8 @@ function empiricalErrorPct(hour){
   if(!Array.isArray(_accuracyLog)||_accuracyLog.length<7) return null;
   const errAt=h=>{
     const vals=_accuracyLog
-      .filter(e=>e.actual>0 && e.snapshots && e.snapshots[h]!=null)
-      .map(e=>Math.abs((e.snapshots[h]-e.actual)/e.actual*100));
+      .filter(e=>e.snapshots && e.snapshots[h]!=null && snapBasis(e)>0)
+      .map(e=>Math.abs((e.snapshots[h]-snapBasis(e))/snapBasis(e)*100));
     return vals.length>=7 ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
   };
   // Before the first snapshot hour the projection is at its least informed, so
@@ -416,6 +480,46 @@ function syncModeControl(){
   });
 }
 
+// Reflects PROVIDER onto its toggle, disabling Monta when it has no baseline.
+function syncProviderControl(){
+  const wrap=$('provider-toggle'); if(!wrap)return;
+  wrap.querySelectorAll('button').forEach(b=>{
+    const on=b.dataset.provider===PROVIDER;
+    b.classList.toggle('active',on);
+    b.setAttribute('aria-pressed',String(on));
+    if(b.dataset.provider==='monta'){
+      b.disabled=!MONTA_OK;
+      b.title=MONTA_OK?'Show Monta sites only':'Monta baseline not built yet — rebuilds Mondays';
+    }
+  });
+}
+
+function setProvider(p){
+  if(!PROVIDERS[p])return;
+  if(p==='monta'&&!MONTA_OK)return;
+  if(p===PROVIDER)return;
+  PROVIDER=p;
+  try{localStorage.setItem('sc.provider',p)}catch(e){}
+  syncProviderControl();
+  // If the open site detail belongs to a provider that's now hidden, close it.
+  if(_selectedSiteId&&PROVIDER!=='all'&&!String(_selectedSiteId).startsWith(PROVIDER+':')){
+    _selectedSiteId=null;
+    $('site-detail').style.display='none';
+    if(siteChart){siteChart.destroy();siteChart=null;}
+  }
+  rerenderAll();
+}
+
+// Shared re-render path for both toggles — everything needed is already in memory.
+function rerenderAll(){
+  render();
+  renderSites();
+  if(_selectedSiteId&&siteHistoryCache[_selectedSiteId]){
+    const card=document.querySelector(`.site-card[data-site-id="${_selectedSiteId}"]`);
+    if(card) paintSiteDetail(_selectedSiteId, card.dataset.siteName, siteHistoryCache[_selectedSiteId]);
+  }
+}
+
 function setMode(m){
   if(m!=='rev'&&m!=='kwh')return;
   if(m==='kwh'&&!KWH_OK)return;
@@ -424,12 +528,7 @@ function setMode(m){
   try{localStorage.setItem('sc.unitMode',m)}catch(e){}
   syncModeControl();
   // Everything needed is already in memory — no refetch on toggle.
-  render();
-  renderSites();
-  if(_selectedSiteId&&siteHistoryCache[_selectedSiteId]){
-    const card=document.querySelector(`.site-card[data-site-id="${_selectedSiteId}"]`);
-    if(card) paintSiteDetail(_selectedSiteId, card.dataset.siteName, siteHistoryCache[_selectedSiteId]);
-  }
+  rerenderAll();
 }
 
 function labelHour(h){const ap=h<12?'AM':'PM';const x=h%12===0?12:h%12;return `${x}${ap}`}
@@ -464,7 +563,7 @@ function drawChart(c, typLabel){
   // Use actual per-hour cumulative from API where available, fall back to scaled typical
   const todayData = Array.from({length:24}, (_,h) => {
     if (h <= c.nowHour) {
-      const entry = TODAY?.hourly?.[h];
+      const entry = hourlySeries()?.[h];
       return entry != null ? (entry[U().hourlyCum] ?? entry.cumulative) : c.cum[h] * c.pace;
     }
     return c.soFar + (c.cum[h] - c.typicalByNow) * c.blendedPace;
@@ -567,14 +666,14 @@ function render7DayChart(log){
     const day = e.dow.slice(0,1).toUpperCase()+e.dow.slice(1);
     return [day, e.date.slice(5)];
   });
-  const profSet = BASELINE[U().prof] || BASELINE.profile;
+  const profSet = profileSet() || BASELINE.profile;
   const baselines = recent.map(e => {
     const prof = profSet[e.dow];
     return prof ? Number(prof.reduce((a,b) => a+b, 0).toFixed(2)) : 0;
   });
   // Days logged before kWh tracking existed have no actualKwh — null leaves a gap
   // in the bar series rather than drawing a misleading zero.
-  const actuals = recent.map(e => e[U().actualField] ?? null);
+  const actuals = recent.map(e => e[actualField()] ?? null);
   const barColors = recent.map((e,i) => e.holiday ? '#29bde8' : ((actuals[i] ?? 0) >= baselines[i] ? '#c5e46a' : '#f59e0b'));
 
   if (weekChart) {
@@ -647,7 +746,8 @@ function render7DayChart(log){
 function renderSites(){
   if(!SITES_DATA?.sites?.length) return;
   $('sites-label').style.display='block';
-  $('site-stats').innerHTML=SITES_DATA.sites
+  const visible=SITES_DATA.sites.filter(s=>PROVIDER==='all'||String(s.id).startsWith(PROVIDER+':'));
+  $('site-stats').innerHTML=visible
     .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}"><div class="k">${s.name}</div><div class="v">${fmt(s[U().siteField] ?? 0)}</div></div>`)
     .join('');
 }
@@ -755,7 +855,12 @@ async function load(){
   // against an undefined profile on first paint.
   KWH_OK = Array.isArray(BASELINE?.profileEnergy?.all);
   if(!KWH_OK && MODE==='kwh') MODE='rev';
+  // Monta needs a per-provider baseline to project against. Until the rebuild has
+  // run, the segment is disabled rather than rendering NaNs.
+  MONTA_OK = Array.isArray(BASELINE?.providers?.monta?.profile?.all);
+  if(!MONTA_OK && PROVIDER==='monta') PROVIDER='all';
   syncModeControl();
+  syncProviderControl();
 
   // Fire today (fast, 1 call) + sites in parallel
   const todayFetch=fetch('/api/today');
@@ -788,8 +893,11 @@ async function load(){
   // Lazy-load hourly breakdown for the intraday chart (slow — 17 calls)
   fetch('/api/today-hourly').then(async r=>{
     if(!r.ok) return;
-    const {hourly, asOfHour}=await r.json();
-    if(TODAY) TODAY.hourly=hourly;
+    const {hourly, asOfHour, byProvider}=await r.json();
+    if(TODAY){
+      TODAY.hourly=hourly;
+      TODAY.byProviderHourly={ ee: byProvider?.ee?.hourly, monta: byProvider?.monta?.hourly };
+    }
     drawChart(compute(), DOW_NAMES[currentDOW(TODAY?.timezone||BASELINE_TZ())]||'day');
   }).catch(()=>{});
 }
@@ -838,7 +946,7 @@ function renderAccuracy(log){
   const limit=parseInt($('acc-range')?.value||'14',10);
   const recent=[...log].reverse().slice(0,limit);
   const avgErrs=SNAP_HOURS.map(h=>{
-    const vals=recent.filter(e=>e.snapshots[h]!=null&&e.actual>0).map(e=>(e.snapshots[h]-e.actual)/e.actual*100);
+    const vals=recent.filter(e=>e.snapshots[h]!=null&&snapBasis(e)>0).map(e=>(e.snapshots[h]-snapBasis(e))/snapBasis(e)*100);
     if(!vals.length)return null;
     return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
   });
@@ -854,9 +962,9 @@ function renderAccuracy(log){
   html+='</tr></thead><tbody>';
   recent.forEach(e=>{
     const holidayMark=e.holiday?' <span title="Holiday — excluded from the baseline model, shown here for reference">＊</span>':'';
-    html+=`<tr><td>${e.date.slice(5)}${holidayMark}</td><td>${e.dow}</td><td>${fmtRev(e.actual)}</td>`;
+    html+=`<tr><td>${e.date.slice(5)}${holidayMark}</td><td>${e.dow}</td><td>${fmtRev(snapBasis(e))}</td>`;
     SNAP_HOURS.forEach(h=>{
-      html+=e.snapshots[h]==null?'<td>—</td>':`<td>${errPill(e.snapshots[h],e.actual)}</td>`;
+      html+=e.snapshots[h]==null?'<td>—</td>':`<td>${errPill(e.snapshots[h],snapBasis(e))}</td>`;
     });
     html+='</tr>';
   });
@@ -895,6 +1003,10 @@ function bindControls(){
     const b=e.target.closest('button[data-unit]');
     if(b&&!b.disabled) setMode(b.dataset.unit);
   });
+  $('provider-toggle')?.addEventListener('click',e=>{
+    const b=e.target.closest('button[data-provider]');
+    if(b&&!b.disabled) setProvider(b.dataset.provider);
+  });
   $('week-range')?.addEventListener('change',()=>render7DayChart(_accuracyLog));
   $('acc-range')?.addEventListener('change',()=>renderAccuracy(_accuracyLog));
   $('acc-toggle')?.addEventListener('click',(e)=>{
@@ -913,7 +1025,9 @@ tick();setInterval(tick,1000*30);
 // BASELINE loads, so load() re-checks and falls back to '$' if there's no
 // energy profile.
 try{ const m=localStorage.getItem('sc.unitMode'); if(m==='kwh'||m==='rev') MODE=m; }catch(e){}
+try{ const p=localStorage.getItem('sc.provider'); if(PROVIDERS[p]) PROVIDER=p; }catch(e){}
 syncModeControl();
+syncProviderControl();
 bindControls();
 load();
 loadAccuracy();

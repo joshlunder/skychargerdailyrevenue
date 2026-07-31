@@ -242,7 +242,11 @@ export default async function handler(req, res) {
     // from the baseline calculation (rebuild-baseline.js) since they'd skew what
     // "typical" looks like, but that doesn't mean the day itself should be invisible.
     log = log.filter(e => e.date !== dateStr);
-    log.push({ date: dateStr, dow, actual, actualKwh, actualEe, actualKwhEe, actualMonta, actualKwhMonta, snapshots, ...(holiday ? { holiday: true } : {}) });
+    // snapshotScope records WHICH actual these snapshots should be measured
+    // against. Entries logged before Monta joined the model hold EE-only
+    // projections and carry no marker, so the frontend compares those against
+    // actualEe; "all" means the replay used the combined fleet.
+    log.push({ date: dateStr, dow, actual, actualKwh, actualEe, actualKwhEe, actualMonta, actualKwhMonta, snapshots, snapshotScope: "all", ...(holiday ? { holiday: true } : {}) });
     log = log.slice(-90);
 
     console.log(`[log-accuracy] writing accuracy-log.json (${log.length} entries)`);
