@@ -108,6 +108,14 @@
   footer{color:var(--muted);font-size:12px;line-height:1.6}
 
   .section-label{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+  /* Provider marker on site cards. Lives inside .k so it inherits the mono/uppercase
+     treatment and adds no card height. */
+  .prov{
+    display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;
+    font-size:9px;letter-spacing:.08em;vertical-align:middle;
+    background:var(--line);color:var(--muted);font-weight:500
+  }
+  .prov.monta{background:var(--blue-dim);color:#1c7f9e}
   .site-card{cursor:pointer;transition:border-color .15s,background .15s}
   .site-card:hover{border-color:#b0b8c4}
   .site-card.selected{border-color:var(--blue-vivid);background:#f0fbff}
@@ -748,7 +756,7 @@ function renderSites(){
   $('sites-label').style.display='block';
   const visible=SITES_DATA.sites.filter(s=>PROVIDER==='all'||String(s.id).startsWith(PROVIDER+':'));
   $('site-stats').innerHTML=visible
-    .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}"><div class="k">${s.name}</div><div class="v">${fmt(s[U().siteField] ?? 0)}</div></div>`)
+    .map(s=>`<div class="stat site-card" data-site-id="${s.id}" data-site-name="${s.name}"><div class="k">${s.name}${provBadge(s)}</div><div class="v">${fmt(s[U().siteField] ?? 0)}</div></div>`)
     .join('');
 }
 
@@ -805,12 +813,24 @@ function renderSiteChart(daily){
 }
 
 // Builds the detail card shell. `daily` may be null while the fetch is in flight.
+// Tiny provider marker. Reads the API's `provider` field, falling back to the
+// namespaced ID prefix so it still works against a cached older response.
+function providerOf(site){
+  if(site?.provider) return site.provider;
+  const id=String(site?.id ?? site ?? '');
+  return id.startsWith('monta:') ? 'monta' : 'ee';
+}
+function provBadge(site){
+  const p=providerOf(site);
+  return `<span class="prov ${p}" title="${p==='monta'?'Monta':'Electric Era'}">${p==='monta'?'MONTA':'EE'}</span>`;
+}
+
 function paintSiteDetail(siteId, siteName, daily){
   const site=SITES_DATA?.sites?.find(s=>String(s.id)===String(siteId));
   const todayVal=site?fmt(site[U().siteField] ?? 0):'—';
   const det=$('site-detail');
   det.style.display='block';
-  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${todayVal}</span></div><p id="site-detail-sub">${daily?'Last 30 days — hover bars for totals.':'Loading…'}</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>${U().siteLegend}</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span><span style="display:flex;align-items:center;gap:6px"><i style="background:repeating-linear-gradient(90deg,#8591a2 0 5px,transparent 5px 9px);height:2px;width:18px"></i>30-day avg</span></div></div>`;
+  det.innerHTML=`<div class="chartcard"><div class="chartcard-header"><h2>${siteName}${provBadge(site||siteId)}</h2><span style="font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--muted)">Today: ${todayVal}</span></div><p id="site-detail-sub">${daily?'Last 30 days — hover bars for totals.':'Loading…'}</p><div style="position:relative;height:200px"><canvas id="site-chart"></canvas></div><div class="legend"><span style="display:flex;align-items:center;gap:6px"><i style="background:#b8c4cf;border-radius:2px"></i>${U().siteLegend}</span><span style="display:flex;align-items:center;gap:6px"><i style="background:#29bde8;height:2px;width:18px;border-radius:2px"></i>7-day avg</span><span style="display:flex;align-items:center;gap:6px"><i style="background:repeating-linear-gradient(90deg,#8591a2 0 5px,transparent 5px 9px);height:2px;width:18px"></i>30-day avg</span></div></div>`;
   if(daily) renderSiteChart(daily);
 }
 
