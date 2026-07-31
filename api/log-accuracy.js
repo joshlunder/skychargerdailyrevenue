@@ -113,14 +113,15 @@ function utcOffsetString(tz, refDate) {
 
 // Monta totals for one ET day, never throwing.
 async function montaDaySafe(tz, dateStr) {
-  if (!montaConfigured()) return { revenue: 0, energyKwh: 0, ok: false };
+  const blankHours = Array.from({ length: 24 }, () => ({ revenue: 0, energyKwh: 0 }));
+  if (!montaConfigured()) return { revenue: 0, energyKwh: 0, hourly: blankHours, ok: false };
   try {
     const token = await montaToken();
-    const { totals } = await montaForDate(token, { date: dateStr, tz });
-    return { ...totals, ok: true };
+    const { totals, hourly } = await montaForDate(token, { date: dateStr, tz });
+    return { ...totals, hourly, ok: true };
   } catch (e) {
     console.error(`[log-accuracy] monta failed: ${e.message || e}`);
-    return { revenue: 0, energyKwh: 0, ok: false };
+    return { revenue: 0, energyKwh: 0, hourly: blankHours, ok: false };
   }
 }
 
@@ -167,11 +168,11 @@ export default async function handler(req, res) {
       }));
       hourStats.push(...results);
     }
-    // The projection replay below stays revenue-only by design, so `snapshots`
-    // needs no mode awareness and this file keeps exactly one copy of the model.
-    const hourRevenues = hourStats.map(s => s.revenue);
+    // The projection replay below stays revenue-only (never kWh), so `snapshots`
+    // needs no unit awareness and this file keeps exactly one copy of the model.
+    const eeHourRevenues = hourStats.map(s => s.revenue);
 
-    const actualEe = Number(hourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
+    const actualEe = Number(eeHourRevenues.reduce((a, b) => a + b, 0).toFixed(2));
     const actualKwhEe = Number(hourStats.reduce((a, s) => a + s.energyKwh, 0).toFixed(1));
 
     // Monta's contribution to the same ET day.
@@ -183,6 +184,12 @@ export default async function handler(req, res) {
     // preserved so the provider toggle can filter and the backfill stays idempotent.
     const actual = Number((actualEe + actualMonta).toFixed(2));
     const actualKwh = Number((actualKwhEe + actualKwhMonta).toFixed(1));
+
+    // The replay MUST use combined hourly revenue, because the baseline profile it
+    // projects against is the combined curve. Replaying an EE-only "so far" against
+    // a combined baseline would systematically under-project by Monta's share and
+    // make every accuracy row look broken.
+    const hourRevenues = eeHourRevenues.map((rev, h) => rev + (monta.hourly?.[h]?.revenue || 0));
     console.log(`[log-accuracy] ${dateStr}: ee $${actualEe}/${actualKwhEe}kWh + monta $${actualMonta}/${actualKwhMonta}kWh = $${actual}/${actualKwh}kWh${holiday ? " (holiday)" : ""}${monta.ok ? "" : " [monta degraded]"}`);
 
     // Load baseline (Blob first, then bundled fallback)
