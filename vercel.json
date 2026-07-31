@@ -18,6 +18,9 @@
     },
     "api/site-history.js": {
       "maxDuration": 60
+    },
+    "api/backfill-monta.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
