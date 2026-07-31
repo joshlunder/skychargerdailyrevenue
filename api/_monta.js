@@ -84,16 +84,24 @@ export async function montaCASites(token) {
     .map(s => ({ id: s.id, name: s.name, zip: s.location?.address?.zip, city: s.location?.address?.city }));
 }
 
+// Pagination is parallelised after the first page reveals totalPageCount. A large
+// site like Pepsi spans ~36 pages over 30 days; fetching those serially took over
+// 60s and tripped the function timeout. Batched fives cut it to ~8 rounds.
 async function chargesForSite(token, siteId, fromISO, toISO) {
-  const out = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const d = await get(token, "/charges", {
-      siteId, fromDate: fromISO, toDate: toISO, perPage: PER_PAGE, page,
-    });
-    const items = d?.data || [];
-    out.push(...items);
-    const total = d?.meta?.totalPageCount ?? 0;
-    if (page + 1 >= total || items.length === 0) break;
+  const params = { siteId, fromDate: fromISO, toDate: toISO, perPage: PER_PAGE };
+  const first = await get(token, "/charges", { ...params, page: 0 });
+  const out = [...(first?.data || [])];
+  const total = Math.min(first?.meta?.totalPageCount ?? 1, MAX_PAGES);
+  if (total <= 1 || out.length === 0) return out;
+
+  const pages = Array.from({ length: total - 1 }, (_, i) => i + 1);
+  const BATCH = 5;
+  for (let i = 0; i < pages.length; i += BATCH) {
+    const batch = pages.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map(page => get(token, "/charges", { ...params, page }).catch(() => null))
+    );
+    for (const d of results) if (d?.data) out.push(...d.data);
   }
   return out;
 }

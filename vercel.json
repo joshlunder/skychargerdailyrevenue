@@ -17,7 +17,7 @@
       "maxDuration": 60
     },
     "api/site-history.js": {
-      "maxDuration": 60
+      "maxDuration": 120
     }
   },
   "crons": [
